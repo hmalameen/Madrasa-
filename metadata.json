@@ -1,0 +1,6 @@
+{
+  "name": "Ummul Quran Cadet Madrasa Management System",
+  "description": "Production-grade multilingual madrasa management system for Ummul Quran Cadet Madrasa (উম্মুল কুরআন ক্যাডেট মাদ্রাসা) combining Qawmi, Hifz, and General education.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

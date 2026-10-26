@@ -1,0 +1,223 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Tiro Bangla', 'Hind Siliguri', 'Plus Jakarta Sans', 'Noto Naskh Arabic', serif;
+  --font-mono: 'Tiro Bangla', 'JetBrains Mono', 'Noto Naskh Arabic', serif;
+}
+
+:root {
+  --font-bn: 'Tiro Bangla', 'Hind Siliguri', 'Plus Jakarta Sans', 'Noto Naskh Arabic', serif;
+  --font-en: 'Plus Jakarta Sans', 'Tiro Bangla', 'Noto Naskh Arabic', sans-serif;
+  --font-ar: 'Noto Naskh Arabic', 'Tiro Bangla', 'Plus Jakarta Sans', serif;
+  --font-mono: 'Tiro Bangla', 'JetBrains Mono', 'Noto Naskh Arabic', serif;
+}
+
+html[lang="bn"] body,
+html[lang="bn"] button,
+html[lang="bn"] input,
+html[lang="bn"] select,
+html[lang="bn"] textarea,
+html[lang="bn"] svg text {
+  font-family: var(--font-bn);
+}
+
+html[lang="en"] body {
+  font-family: var(--font-en);
+}
+
+html[lang="ar"] body {
+  font-family: var(--font-ar);
+}
+
+.font-mono,
+.tabular-nums {
+  font-family: var(--font-mono) !important;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Phase 6A — Animated Login UI Keyframes & Utilities */
+@keyframes uqcm-bg-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes uqcm-trail-flow {
+  0% {
+    stroke-dashoffset: 1200;
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.95;
+  }
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0.45;
+  }
+}
+
+@keyframes uqcm-trail-flow-reverse {
+  0% {
+    stroke-dashoffset: 0;
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.85;
+  }
+  100% {
+    stroke-dashoffset: 1200;
+    opacity: 0.35;
+  }
+}
+
+@keyframes uqcm-particle-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.35;
+  }
+  50% {
+    transform: translate3d(8px, -14px, 0) scale(1.25);
+    opacity: 0.9;
+  }
+}
+
+@keyframes uqcm-lantern-sway {
+  0%,
+  100% {
+    transform: rotate(-1.6deg);
+  }
+  50% {
+    transform: rotate(1.6deg);
+  }
+}
+
+@keyframes uqcm-glow-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.97);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes uqcm-brand-fade-in {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes uqcm-card-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(22px) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes uqcm-view-switch {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-uqcm-bg {
+  background-size: 200% 200%;
+  animation: uqcm-bg-shift 18s ease-in-out infinite;
+}
+
+.animate-uqcm-trail {
+  stroke-dasharray: 260 940;
+  animation: uqcm-trail-flow 11s linear infinite;
+}
+
+.animate-uqcm-trail-reverse {
+  stroke-dasharray: 220 980;
+  animation: uqcm-trail-flow-reverse 14s linear infinite;
+}
+
+.animate-uqcm-particle {
+  animation: uqcm-particle-drift 6.5s ease-in-out infinite;
+}
+
+.animate-uqcm-lantern {
+  transform-origin: top center;
+  animation: uqcm-lantern-sway 5.5s ease-in-out infinite;
+}
+
+.animate-uqcm-glow {
+  animation: uqcm-glow-pulse 4s ease-in-out infinite;
+}
+
+.animate-uqcm-brand {
+  animation: uqcm-brand-fade-in 0.75s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.animate-uqcm-card {
+  animation: uqcm-card-enter 0.65s cubic-bezier(0.16, 1, 0.3, 1) 0.08s both;
+}
+
+.animate-uqcm-view {
+  animation: uqcm-view-switch 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.uqcm-input-shell {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.uqcm-input-shell:focus-within {
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.22), 0 0 18px rgba(16, 185, 129, 0.24);
+  background-color: rgba(6, 32, 48, 0.88);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-uqcm-bg,
+  .animate-uqcm-trail,
+  .animate-uqcm-trail-reverse,
+  .animate-uqcm-particle,
+  .animate-uqcm-lantern,
+  .animate-uqcm-glow,
+  .animate-uqcm-brand,
+  .animate-uqcm-card,
+  .animate-uqcm-view {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+}
+

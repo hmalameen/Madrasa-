@@ -1,0 +1,713 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile and role-based access configuration for madrasa portal users.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 200 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "role": {
+          "type": "string",
+          "enum": ["super_admin", "muhtamim", "teacher", "accountant", "residential_supervisor", "guardian", "student", "staff"]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "pending", "suspended"]
+        },
+        "linkedStudentIds": { "type": "string", "maxLength": 500 },
+        "assignedClasses": { "type": "string", "maxLength": 300 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "status", "linkedStudentIds", "assignedClasses", "phone", "createdAt", "updatedAt"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Student admission and profile record across Qawmi, Hifz, and General departments.",
+      "type": "object",
+      "properties": {
+        "admissionNo": { "type": "string", "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nameBn": { "type": "string", "maxLength": 120 },
+        "nameEn": { "type": "string", "maxLength": 120 },
+        "nameAr": { "type": "string", "maxLength": 120 },
+        "department": { "type": "string", "enum": ["hifz", "qawmi", "general"] },
+        "className": { "type": "string", "maxLength": 60 },
+        "rollNo": { "type": "number" },
+        "dateOfBirth": { "type": "string", "maxLength": 20 },
+        "bloodGroup": { "type": "string", "maxLength": 10 },
+        "admissionDate": { "type": "string", "maxLength": 20 },
+        "guardianName": { "type": "string", "maxLength": 120 },
+        "guardianPhone": { "type": "string", "maxLength": 30 },
+        "guardianRelation": { "type": "string", "maxLength": 40 },
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "studentUid": { "type": "string", "maxLength": 128 },
+        "photoUrl": { "type": "string", "maxLength": 75000 },
+        "applicationId": { "type": "string", "maxLength": 128 },
+        "residentialStatus": { "type": "string", "enum": ["residential", "day_scholar"] },
+        "dormitoryRoom": { "type": "string", "maxLength": 60 },
+        "monthlyFeeBdt": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "on_leave", "graduated", "transferred"] },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "admissionNo", "nameBn", "nameEn", "nameAr", "department", "className", "rollNo",
+        "dateOfBirth", "bloodGroup", "admissionDate", "guardianName", "guardianPhone",
+        "guardianRelation", "guardianUid", "residentialStatus", "dormitoryRoom",
+        "monthlyFeeBdt", "status", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "StaffMember": {
+      "title": "StaffMember",
+      "description": "Teacher and staff employment profile and salary structure.",
+      "type": "object",
+      "properties": {
+        "employeeCode": { "type": "string", "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nameBn": { "type": "string", "maxLength": 120 },
+        "nameEn": { "type": "string", "maxLength": 120 },
+        "designation": { "type": "string", "maxLength": 80 },
+        "role": { "type": "string", "enum": ["muhtamim", "teacher", "accountant", "residential_supervisor", "staff"] },
+        "department": { "type": "string", "enum": ["hifz", "qawmi", "general", "administration", "boarding"] },
+        "assignedClasses": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "qualification": { "type": "string", "maxLength": 150 },
+        "joiningDate": { "type": "string", "maxLength": 20 },
+        "basicSalaryBdt": { "type": "number" },
+        "houseAllowanceBdt": { "type": "number" },
+        "medicalAllowanceBdt": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "on_leave", "resigned"] },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "employeeCode", "nameBn", "nameEn", "designation", "role", "department",
+        "assignedClasses", "phone", "qualification", "joiningDate", "basicSalaryBdt",
+        "houseAllowanceBdt", "medicalAllowanceBdt", "status", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily student attendance record.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 15 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentNameBn": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "className": { "type": "string", "maxLength": 60 },
+        "department": { "type": "string", "enum": ["hifz", "qawmi", "general"] },
+        "status": { "type": "string", "enum": ["present", "absent", "late", "leave"] },
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "remarks": { "type": "string", "maxLength": 200 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "date", "studentId", "studentNameBn", "admissionNo", "className",
+        "department", "status", "guardianUid", "remarks", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "ExamResult": {
+      "title": "ExamResult",
+      "description": "Student subject marks and grade record for madrasa examinations.",
+      "type": "object",
+      "properties": {
+        "examName": { "type": "string", "maxLength": 100 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentNameBn": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "className": { "type": "string", "maxLength": 60 },
+        "department": { "type": "string", "enum": ["hifz", "qawmi", "general"] },
+        "subjectName": { "type": "string", "maxLength": 80 },
+        "marksObtained": { "type": "number" },
+        "fullMarks": { "type": "number" },
+        "grade": { "type": "string", "maxLength": 20 },
+        "isPublished": { "type": "boolean" },
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "examName", "academicYear", "studentId", "studentNameBn", "admissionNo",
+        "className", "department", "subjectName", "marksObtained", "fullMarks",
+        "grade", "isPublished", "guardianUid", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "FeeInvoice": {
+      "title": "FeeInvoice",
+      "description": "Student fee invoice and verified payment receipt.",
+      "type": "object",
+      "properties": {
+        "receiptNo": { "type": "string", "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentNameBn": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "className": { "type": "string", "maxLength": 60 },
+        "feeType": { "type": "string", "enum": ["monthly_tuition", "boarding_mess", "admission_fee", "exam_fee", "generator_utility"] },
+        "billingMonth": { "type": "string", "maxLength": 20 },
+        "amountDueBdt": { "type": "number" },
+        "amountPaidBdt": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["cash", "bkash", "nagad", "bank_transfer", "unpaid"] },
+        "transactionRef": { "type": "string", "maxLength": 80 },
+        "status": { "type": "string", "enum": ["paid", "partial", "unpaid"] },
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "receiptNo", "studentId", "studentNameBn", "admissionNo", "className",
+        "feeType", "billingMonth", "amountDueBdt", "amountPaidBdt", "paymentMethod",
+        "transactionRef", "status", "guardianUid", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "ExpenseRecord": {
+      "title": "ExpenseRecord",
+      "description": "Institutional operational and boarding expense record.",
+      "type": "object",
+      "properties": {
+        "voucherNo": { "type": "string", "maxLength": 40, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "maxLength": 120 },
+        "category": { "type": "string", "enum": ["boarding_food", "utilities", "maintenance", "stationery", "events"] },
+        "amountBdt": { "type": "number" },
+        "expenseDate": { "type": "string", "maxLength": 20 },
+        "approvedBy": { "type": "string", "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 250 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "voucherNo", "title", "category", "amountBdt", "expenseDate",
+        "approvedBy", "notes", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "HifzProgressLog": {
+      "title": "HifzProgressLog",
+      "description": "Daily Hifz-ul-Quran Sabaq, Sabqi, and Manzil tracking record.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 15 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentNameBn": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "paraNumber": { "type": "number" },
+        "sabaqSurahAndAyat": { "type": "string", "maxLength": 100 },
+        "sabaqLines": { "type": "number" },
+        "sabqiPara": { "type": "string", "maxLength": 60 },
+        "manzilPara": { "type": "string", "maxLength": 60 },
+        "tajweedRating": { "type": "string", "enum": ["mumtaz", "jayyid_jiddan", "jayyid", "needs_revision"] },
+        "teacherComment": { "type": "string", "maxLength": 250 },
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "date", "studentId", "studentNameBn", "admissionNo", "paraNumber",
+        "sabaqSurahAndAyat", "sabaqLines", "sabqiPara", "manzilPara",
+        "tajweedRating", "teacherComment", "guardianUid", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "ResidentialLeave": {
+      "title": "ResidentialLeave",
+      "description": "Dormitory gate pass and student leave record.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentNameBn": { "type": "string", "maxLength": 120 },
+        "admissionNo": { "type": "string", "maxLength": 40 },
+        "dormitoryRoom": { "type": "string", "maxLength": 60 },
+        "reason": { "type": "string", "maxLength": 200 },
+        "departureDate": { "type": "string", "maxLength": 25 },
+        "expectedReturnDate": { "type": "string", "maxLength": 25 },
+        "actualReturnDate": { "type": "string", "maxLength": 25 },
+        "accompaniedBy": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["pending", "approved", "returned", "rejected"] },
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "studentId", "studentNameBn", "admissionNo", "dormitoryRoom", "reason",
+        "departureDate", "expectedReturnDate", "actualReturnDate", "accompaniedBy",
+        "status", "guardianUid", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "PayrollRecord": {
+      "title": "PayrollRecord",
+      "description": "Monthly staff salary payment record with restricted financial access.",
+      "type": "object",
+      "properties": {
+        "staffId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "staffNameBn": { "type": "string", "maxLength": 120 },
+        "employeeCode": { "type": "string", "maxLength": 40 },
+        "designation": { "type": "string", "maxLength": 80 },
+        "salaryMonth": { "type": "string", "maxLength": 20 },
+        "basicSalaryBdt": { "type": "number" },
+        "allowancesBdt": { "type": "number" },
+        "deductionsBdt": { "type": "number" },
+        "netPayableBdt": { "type": "number" },
+        "status": { "type": "string", "enum": ["paid", "pending"] },
+        "paymentDate": { "type": "string", "maxLength": 20 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "staffId", "staffNameBn", "employeeCode", "designation", "salaryMonth",
+        "basicSalaryBdt", "allowancesBdt", "deductionsBdt", "netPayableBdt",
+        "status", "paymentDate", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "Notice": {
+      "title": "Notice",
+      "description": "Institutional notice and announcement targeted by role or class.",
+      "type": "object",
+      "properties": {
+        "titleBn": { "type": "string", "maxLength": 150 },
+        "titleEn": { "type": "string", "maxLength": 150 },
+        "contentBn": { "type": "string", "maxLength": 1000 },
+        "targetAudience": { "type": "string", "enum": ["all", "guardians", "teachers", "residential", "students"] },
+        "targetClass": { "type": "string", "maxLength": 60 },
+        "priority": { "type": "string", "enum": ["normal", "important", "urgent"] },
+        "publishDate": { "type": "string", "maxLength": 20 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "titleBn", "titleEn", "contentBn", "targetAudience", "targetClass",
+        "priority", "publishDate", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "InstitutionSettings": {
+      "title": "InstitutionSettings",
+      "description": "Global madrasa settings, academic year, and grading rules.",
+      "type": "object",
+      "properties": {
+        "institutionNameBn": { "type": "string", "maxLength": 150 },
+        "institutionNameEn": { "type": "string", "maxLength": 150 },
+        "institutionNameAr": { "type": "string", "maxLength": 150 },
+        "academicYear": { "type": "string", "maxLength": 30 },
+        "hijriYear": { "type": "string", "maxLength": 30 },
+        "addressBn": { "type": "string", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "email": { "type": "string", "maxLength": 100 },
+        "defaultLanguage": { "type": "string", "enum": ["bn", "en", "ar"] },
+        "activeDepartments": { "type": "string", "maxLength": 200 },
+        "gradingSystem": { "type": "string", "maxLength": 300 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "institutionNameBn", "institutionNameEn", "institutionNameAr",
+        "academicYear", "hijriYear", "addressBn", "phone", "email",
+        "defaultLanguage", "activeDepartments", "gradingSystem",
+        "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "BannerSlide": {
+      "title": "BannerSlide",
+      "description": "Configurable dashboard announcement and welcome carousel slide.",
+      "type": "object",
+      "properties": {
+        "category": { "type": "string", "enum": ["academic", "exam", "admission", "event"] },
+        "badgeBn": { "type": "string", "maxLength": 200 },
+        "badgeEn": { "type": "string", "maxLength": 200 },
+        "badgeAr": { "type": "string", "maxLength": 200 },
+        "titleBn": { "type": "string", "maxLength": 300 },
+        "titleEn": { "type": "string", "maxLength": 300 },
+        "titleAr": { "type": "string", "maxLength": 300 },
+        "descriptionBn": { "type": "string", "maxLength": 1000 },
+        "descriptionEn": { "type": "string", "maxLength": 1000 },
+        "descriptionAr": { "type": "string", "maxLength": 1000 },
+        "metaDate": { "type": "string", "maxLength": 120 },
+        "ctaModule": {
+          "type": "string",
+          "enum": ["dashboard", "admissions", "students", "staff", "attendance", "exams", "fees", "hifz", "residential", "payroll", "student_portal", "guardian", "notices", "reports", "settings"]
+        },
+        "ctaLabelBn": { "type": "string", "maxLength": 150 },
+        "ctaLabelEn": { "type": "string", "maxLength": 150 },
+        "ctaLabelAr": { "type": "string", "maxLength": 150 },
+        "theme": { "type": "string", "enum": ["emerald", "navy", "ivory"] },
+        "isActive": { "type": "boolean" },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "category", "badgeBn", "badgeEn", "badgeAr", "titleBn", "titleEn", "titleAr",
+        "descriptionBn", "descriptionEn", "descriptionAr", "metaDate", "ctaModule",
+        "ctaLabelBn", "ctaLabelEn", "ctaLabelAr", "theme", "isActive",
+        "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "StudyDiaryEntry": {
+      "title": "StudyDiaryEntry",
+      "description": "Daily study diary, lesson covered, homework assignment, completion status, and teacher feedback.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "maxLength": 40 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentNameBn": { "type": "string", "maxLength": 300 },
+        "admissionNo": { "type": "string", "maxLength": 100 },
+        "className": { "type": "string", "maxLength": 250 },
+        "department": { "type": "string", "enum": ["hifz", "qawmi", "general"] },
+        "subjectName": { "type": "string", "maxLength": 300 },
+        "lessonCovered": { "type": "string", "maxLength": 800 },
+        "homeworkAssigned": { "type": "string", "maxLength": 800 },
+        "dueDate": { "type": "string", "maxLength": 40 },
+        "completionStatus": { "type": "string", "enum": ["pending", "completed", "needs_revision"] },
+        "teacherFeedback": { "type": "string", "maxLength": 800 },
+        "learningGoal": { "type": "string", "maxLength": 800 },
+        "visibleToGuardian": { "type": "boolean" },
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "date", "studentId", "studentNameBn", "admissionNo", "className",
+        "department", "subjectName", "lessonCovered", "homeworkAssigned",
+        "dueDate", "completionStatus", "teacherFeedback", "learningGoal",
+        "visibleToGuardian", "guardianUid", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "GuardianInquiry": {
+      "title": "GuardianInquiry",
+      "description": "Guardian-to-madrasa secure academic or residential inquiry and teacher reply.",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentNameBn": { "type": "string", "maxLength": 300 },
+        "admissionNo": { "type": "string", "maxLength": 100 },
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "guardianName": { "type": "string", "maxLength": 300 },
+        "subject": { "type": "string", "maxLength": 300 },
+        "message": { "type": "string", "maxLength": 1500 },
+        "teacherReply": { "type": "string", "maxLength": 1500 },
+        "status": { "type": "string", "enum": ["open", "replied", "resolved"] },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "studentId", "studentNameBn", "admissionNo", "guardianUid",
+        "guardianName", "subject", "message", "teacherReply",
+        "status", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "AdmissionApplication": {
+      "title": "AdmissionApplication",
+      "description": "Multi-step online admission application, student photo, documents, and Muhtamim approval state.",
+      "type": "object",
+      "properties": {
+        "referenceNo": { "type": "string", "maxLength": 80, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "applicantUid": { "type": "string", "maxLength": 128 },
+        "applicantEmail": { "type": "string", "maxLength": 200 },
+        "nameBn": { "type": "string", "maxLength": 200 },
+        "nameEn": { "type": "string", "maxLength": 200 },
+        "nameAr": { "type": "string", "maxLength": 200 },
+        "dateOfBirth": { "type": "string", "maxLength": 30 },
+        "gender": { "type": "string", "enum": ["male", "female"] },
+        "bloodGroup": { "type": "string", "maxLength": 20 },
+        "birthRegNo": { "type": "string", "maxLength": 80 },
+        "presentAddress": { "type": "string", "maxLength": 400 },
+        "permanentAddress": { "type": "string", "maxLength": 400 },
+        "photoUrl": { "type": "string", "maxLength": 75000 },
+        "photoFileName": { "type": "string", "maxLength": 180 },
+        "fatherName": { "type": "string", "maxLength": 200 },
+        "fatherPhone": { "type": "string", "maxLength": 40 },
+        "motherName": { "type": "string", "maxLength": 200 },
+        "motherPhone": { "type": "string", "maxLength": 40 },
+        "guardianName": { "type": "string", "maxLength": 200 },
+        "guardianRelation": { "type": "string", "maxLength": 100 },
+        "guardianPhone": { "type": "string", "maxLength": 40 },
+        "guardianEmail": { "type": "string", "maxLength": 200 },
+        "requestGuardianAccount": { "type": "boolean" },
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "department": { "type": "string", "enum": ["hifz", "qawmi", "general"] },
+        "requestedClass": { "type": "string", "maxLength": 160 },
+        "academicSession": { "type": "string", "maxLength": 40 },
+        "previousInstitution": { "type": "string", "maxLength": 250 },
+        "previousClass": { "type": "string", "maxLength": 160 },
+        "residentialStatus": { "type": "string", "enum": ["residential", "day_scholar"] },
+        "medicalOrSpecialNotes": { "type": "string", "maxLength": 500 },
+        "birthCertDocName": { "type": "string", "maxLength": 200 },
+        "birthCertDocDataUrl": { "type": "string", "maxLength": 75000 },
+        "prevCertDocName": { "type": "string", "maxLength": 200 },
+        "consentAccepted": { "type": "boolean" },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "under_review", "needs_correction", "approved", "rejected"]
+        },
+        "adminRemarks": { "type": "string", "maxLength": 800 },
+        "assignedStudentId": { "type": "string", "maxLength": 128 },
+        "assignedAdmissionNo": { "type": "string", "maxLength": 80 },
+        "assignedRollNo": { "type": "number" },
+        "assignedDormitoryRoom": { "type": "string", "maxLength": 200 },
+        "assignedMonthlyFeeBdt": { "type": "number" },
+        "reviewedByUid": { "type": "string", "maxLength": 128 },
+        "reviewedByName": { "type": "string", "maxLength": 200 },
+        "decisionAt": { "type": "string", "maxLength": 60 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "referenceNo", "applicantUid", "applicantEmail",
+        "nameBn", "nameEn", "nameAr", "dateOfBirth", "gender", "bloodGroup",
+        "birthRegNo", "presentAddress", "permanentAddress", "photoUrl", "photoFileName",
+        "fatherName", "fatherPhone", "motherName", "motherPhone",
+        "guardianName", "guardianRelation", "guardianPhone", "guardianEmail",
+        "requestGuardianAccount", "guardianUid",
+        "department", "requestedClass", "academicSession", "previousInstitution", "previousClass",
+        "residentialStatus", "medicalOrSpecialNotes",
+        "birthCertDocName", "birthCertDocDataUrl", "prevCertDocName", "consentAccepted",
+        "status", "adminRemarks", "assignedStudentId", "assignedAdmissionNo",
+        "assignedRollNo", "assignedDormitoryRoom", "assignedMonthlyFeeBdt",
+        "reviewedByUid", "reviewedByName", "decisionAt",
+        "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "GuardianLinkRequest": {
+      "title": "GuardianLinkRequest",
+      "description": "Guardian-to-child verification and linking request requiring administrative approval.",
+      "type": "object",
+      "properties": {
+        "guardianUid": { "type": "string", "maxLength": 128 },
+        "guardianName": { "type": "string", "maxLength": 200 },
+        "guardianPhone": { "type": "string", "maxLength": 40 },
+        "guardianEmail": { "type": "string", "maxLength": 200 },
+        "relationship": { "type": "string", "maxLength": 100 },
+        "requestedStudentId": { "type": "string", "maxLength": 128 },
+        "requestedAdmissionNo": { "type": "string", "maxLength": 80 },
+        "studentNameBn": { "type": "string", "maxLength": 200 },
+        "verificationNotes": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "adminRemarks": { "type": "string", "maxLength": 500 },
+        "reviewedByUid": { "type": "string", "maxLength": 128 },
+        "reviewedAt": { "type": "string", "maxLength": 60 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "guardianUid", "guardianName", "guardianPhone", "guardianEmail",
+        "relationship", "requestedStudentId", "requestedAdmissionNo",
+        "studentNameBn", "verificationNotes", "status", "adminRemarks",
+        "reviewedByUid", "reviewedAt", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "AccountInvitation": {
+      "title": "AccountInvitation",
+      "description": "Single-use Muhtamim, teacher, staff, student, and guardian account activation invitations.",
+      "type": "object",
+      "properties": {
+        "invitationCode": { "type": "string", "minLength": 6, "maxLength": 100, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "targetRole": {
+          "type": "string",
+          "enum": ["muhtamim", "teacher", "accountant", "residential_supervisor", "staff", "student", "guardian"]
+        },
+        "applicationId": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "admissionNo": { "type": "string", "maxLength": 80 },
+        "studentNameBn": { "type": "string", "maxLength": 200 },
+        "recipientName": { "type": "string", "maxLength": 200 },
+        "recipientPhone": { "type": "string", "maxLength": 40 },
+        "recipientEmail": { "type": "string", "maxLength": 200 },
+        "activationUrl": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending_activation", "activated", "revoked", "expired"] },
+        "provisioningMode": { "type": "string", "enum": ["single_use_activation_link"] },
+        "requiresPasswordChangeOnFirstLogin": { "type": "boolean" },
+        "issuedByUid": { "type": "string", "maxLength": 128 },
+        "issuedByRole": { "type": "string", "enum": ["super_admin", "muhtamim"] },
+        "issuedAt": { "type": "string", "maxLength": 60 },
+        "expiresAt": { "type": "string", "maxLength": 60 },
+        "staffId": { "type": "string", "maxLength": 128 },
+        "employeeCode": { "type": "string", "maxLength": 80 },
+        "designation": { "type": "string", "maxLength": 160 },
+        "assignedDepartment": {
+          "type": "string",
+          "enum": ["hifz", "qawmi", "general", "administration", "boarding"]
+        },
+        "assignedClasses": { "type": "string", "maxLength": 300 },
+        "assignedSubjects": { "type": "string", "maxLength": 300 },
+        "redeemedByUid": { "type": "string", "maxLength": 128 },
+        "redeemedAt": { "type": "string", "maxLength": 60 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "invitationCode", "targetRole", "applicationId", "studentId",
+        "admissionNo", "studentNameBn", "recipientName", "recipientPhone",
+        "recipientEmail", "activationUrl", "status", "provisioningMode",
+        "requiresPasswordChangeOnFirstLogin", "issuedByUid", "issuedAt",
+        "redeemedByUid", "redeemedAt", "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "SuperAdminBootstrapLock": {
+      "title": "SuperAdminBootstrapLock",
+      "description": "Immutable one-time Super Admin bootstrap lock record preventing duplicate super_admin creation.",
+      "type": "object",
+      "properties": {
+        "lockId": { "type": "string", "enum": ["super_admin_lock"] },
+        "isProvisioned": { "type": "boolean" },
+        "superAdminUid": { "type": "string", "maxLength": 128 },
+        "superAdminEmail": { "type": "string", "maxLength": 200 },
+        "superAdminName": { "type": "string", "maxLength": 200 },
+        "provisionedAt": { "type": "string", "maxLength": 60 },
+        "bootstrapMethod": { "type": "string", "enum": ["verified_owner_session", "one_time_setup_token"] },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "lockId", "isProvisioned", "superAdminUid", "superAdminEmail",
+        "superAdminName", "provisionedAt", "bootstrapMethod",
+        "authorId", "createdAt", "updatedAt"
+      ]
+    },
+    "AdminAuditLog": {
+      "title": "AdminAuditLog",
+      "description": "Immutable audit log of Super Admin bootstrap, Muhtamim/teacher account invitations, activations, and RBAC changes.",
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "super_admin_bootstrapped",
+            "muhtamim_invited",
+            "staff_invited",
+            "invitation_activated",
+            "invitation_revoked",
+            "user_role_updated",
+            "user_status_suspended",
+            "user_status_activated",
+            "admission_approved"
+          ]
+        },
+        "actorUid": { "type": "string", "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "actorRole": {
+          "type": "string",
+          "enum": ["super_admin", "muhtamim", "teacher", "accountant", "residential_supervisor", "guardian", "student", "staff"]
+        },
+        "targetUid": { "type": "string", "maxLength": 128 },
+        "targetEmail": { "type": "string", "maxLength": 200 },
+        "targetRole": {
+          "type": "string",
+          "enum": ["super_admin", "muhtamim", "teacher", "accountant", "residential_supervisor", "guardian", "student", "staff"]
+        },
+        "summaryBn": { "type": "string", "maxLength": 600 },
+        "timestamp": { "type": "string", "maxLength": 60 },
+        "authorId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "action", "actorUid", "actorEmail", "actorRole",
+        "targetUid", "targetEmail", "targetRole",
+        "summaryBn", "timestamp",
+        "authorId", "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile and role assignment."
+    },
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Student admission and profile records."
+    },
+    "/staff/{staffId}": {
+      "schema": "StaffMember",
+      "description": "Staff and teacher employment records."
+    },
+    "/attendance/{attendanceId}": {
+      "schema": "AttendanceRecord",
+      "description": "Daily student attendance records."
+    },
+    "/exams/{examId}": {
+      "schema": "ExamResult",
+      "description": "Examination subject marks and published grades."
+    },
+    "/invoices/{invoiceId}": {
+      "schema": "FeeInvoice",
+      "description": "Student fee invoices and verified payment receipts."
+    },
+    "/expenses/{expenseId}": {
+      "schema": "ExpenseRecord",
+      "description": "Institutional expense vouchers."
+    },
+    "/hifzLogs/{logId}": {
+      "schema": "HifzProgressLog",
+      "description": "Daily Hifz Sabaq, Sabqi, and Manzil logs."
+    },
+    "/residentialLeaves/{leaveId}": {
+      "schema": "ResidentialLeave",
+      "description": "Dormitory leave requests and gate pass records."
+    },
+    "/payroll/{payrollId}": {
+      "schema": "PayrollRecord",
+      "description": "Staff payroll and salary disbursement records."
+    },
+    "/notices/{noticeId}": {
+      "schema": "Notice",
+      "description": "Institutional notices and announcements."
+    },
+    "/settings/{settingId}": {
+      "schema": "InstitutionSettings",
+      "description": "Institution configuration and academic year settings."
+    },
+    "/bannerSlides/{slideId}": {
+      "schema": "BannerSlide",
+      "description": "Configurable dashboard welcome and announcement banner slides."
+    },
+    "/studyDiary/{entryId}": {
+      "schema": "StudyDiaryEntry",
+      "description": "Daily study diary, homework assignments, completion status, and teacher feedback."
+    },
+    "/guardianInquiries/{inquiryId}": {
+      "schema": "GuardianInquiry",
+      "description": "Secure guardian academic/residential inquiries and teacher responses."
+    },
+    "/admissionApplications/{applicationId}": {
+      "schema": "AdmissionApplication",
+      "description": "Multi-step online admission applications, photos, and approval decisions."
+    },
+    "/guardianLinkRequests/{requestId}": {
+      "schema": "GuardianLinkRequest",
+      "description": "Guardian-to-student relationship verification and linking requests."
+    },
+    "/accountInvitations/{inviteId}": {
+      "schema": "AccountInvitation",
+      "description": "Single-use Muhtamim, teacher, staff, student, and guardian account activation invitations."
+    },
+    "/systemBootstrap/{lockId}": {
+      "schema": "SuperAdminBootstrapLock",
+      "description": "Immutable one-time Super Admin bootstrap lock document."
+    },
+    "/adminAuditLogs/{logId}": {
+      "schema": "AdminAuditLog",
+      "description": "Immutable administrative audit logs for Super Admin and RBAC actions."
+    }
+  }
+}
+
+
+
