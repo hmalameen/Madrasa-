@@ -1391,3 +1391,183 @@ test('inspectFirebaseAdminEnv proves 3 variables alone are insufficient without 
   );
 });
 
+
+
+// ============================================================================
+// PHASE 11: PERSISTENCE, SETTINGS VALIDATION, AND SNAPSHOT RECONCILIATION TESTS
+// ============================================================================
+import {
+  buildCompleteInstitutionSettingsPayload,
+  decodeExamResultFromFirestore,
+  decodeExamSetupFromSettingsEnvelope,
+  encodeExamSetupAsSettingsEnvelope,
+  encodeGradeWithWorkflowMeta,
+  reconcileFirestoreSnapshot,
+  validateInstitutionSettings,
+} from './madrasaLogic';
+
+test('Phase 11 — validates complete institution settings and builds Firestore-compliant payload with defaultLanguage and activeDepartments', () => {
+  const partialSettings = {
+    id: 'default-settings',
+    institutionNameBn: 'উম্মুল কুরআন ক্যাডেট মাদ্রাসা',
+    institutionNameEn: 'Ummul Quran Cadet Madrasa',
+    institutionNameAr: 'مدرسة أم القرآن كاديت',
+    academicYear: '2026-2027',
+    hijriYear: '1447-1448 AH',
+    addressBn: 'মিরপুর, ঢাকা',
+    phone: '01711-000000',
+    email: 'info@ummulquranmadrasa.edu.bd',
+    defaultLanguage: 'bn' as const,
+    gradingSystem: 'মুমতাজ (৮০+), জায়্যিদ জিদ্দান (৬৫+)',
+    activeDepartments: 'নূরানী, হিফয, কিতাব বিভাগ',
+    authorId: 'usr-admin-1',
+  };
+
+  const validation = validateInstitutionSettings(partialSettings);
+  assert.equal(validation.valid, true);
+
+  const payload = buildCompleteInstitutionSettingsPayload({
+    updated: {
+      ...partialSettings,
+      defaultLanguage: undefined as unknown as 'bn',
+      activeDepartments: '',
+    },
+    existing: partialSettings,
+    authorId: 'usr-admin-1',
+  });
+
+  assert.equal(payload.defaultLanguage, 'bn');
+  assert.equal(payload.activeDepartments, 'নূরানী, হিফয, কিতাব বিভাগ');
+  assert.equal(payload.authorId, 'usr-admin-1');
+});
+
+test('Phase 11 — rejects invalid institution settings missing required fields or invalid email', () => {
+  const badSettings = {
+    institutionNameBn: '',
+    institutionNameEn: 'Ummul Quran Cadet Madrasa',
+    institutionNameAr: 'مدرسة أم القرآن كاديت',
+    academicYear: '2026-2027',
+    hijriYear: '1447-1448 AH',
+    addressBn: 'ঢাকা',
+    phone: '017',
+    email: 'invalid-email',
+    defaultLanguage: 'bn' as const,
+    gradingSystem: 'A+',
+    activeDepartments: 'হিফয',
+  };
+  const res = validateInstitutionSettings(badSettings);
+  assert.equal(res.valid, false);
+  assert.ok(res.errorBn);
+});
+
+test('Phase 11 — reconciles Firestore snapshots by stripping demo records and preserving real state on listener error', () => {
+  const prevWithDemo = [
+    { id: 'stu-demo-1', isDemoRecord: true, name: 'Demo Student' },
+    { id: 'stu-real-1', isDemoRecord: false, name: 'Real Student' },
+  ];
+
+  // When listener errors or is not ready, keep real records only, strip demo
+  const onErrorResult = reconcileFirestoreSnapshot({
+    previousState: prevWithDemo,
+    incomingDocs: [],
+    isListenerReady: true,
+    hasListenerError: true,
+  });
+  assert.equal(onErrorResult.length, 1);
+  assert.equal(onErrorResult[0]?.id, 'stu-real-1');
+
+  // When listener succeeds with empty collection, return empty array (do not restore demo records)
+  const onEmptyConfirmedResult = reconcileFirestoreSnapshot({
+    previousState: prevWithDemo,
+    incomingDocs: [],
+    isListenerReady: true,
+    hasListenerError: false,
+  });
+  assert.equal(onEmptyConfirmedResult.length, 0);
+});
+
+test('Phase 11 — encodes and decodes exam workflow metadata in grade field for backward compatibility with 16-key Firestore rules', () => {
+  const encoded = encodeGradeWithWorkflowMeta({
+    grade: 'মুমতাজ (A+)',
+    workflowStatus: 'under_review',
+    isAbsent: false,
+    remarks: 'চমৎকার তিলাওয়াত',
+    gpaPoint: 5,
+    passMarks: 40,
+    sectionName: 'ক শাখা',
+  });
+
+  assert.ok(encoded.length <= 80);
+
+  const decoded = decodeExamResultFromFirestore(
+    {
+      examName: 'প্রথম সাময়িক পরীক্ষা ২০২৬',
+      academicYear: '2026-2027',
+      studentId: 'stu-101',
+      studentNameBn: 'মুহাম্মদ আব্দুল্লাহ',
+      admissionNo: 'UQM-2026-101',
+      className: 'হিফযুল কুরআন',
+      department: 'hifz',
+      subjectName: 'হিফয তিলাওয়াত',
+      marksObtained: 92,
+      fullMarks: 100,
+      grade: encoded,
+      isPublished: false,
+      guardianUid: 'grd-1',
+      authorId: 'usr-admin-1',
+    },
+    'exm-101'
+  );
+
+  assert.equal(decoded.grade, 'মুমতাজ (A+)');
+  assert.equal(decoded.workflowStatus, 'under_review');
+  assert.equal(decoded.remarks, 'চমৎকার তিলাওয়াত');
+  assert.equal(decoded.gpaPoint, 5);
+  assert.equal(decoded.passMarks, 40);
+  assert.equal(decoded.sectionName, 'ক শাখা');
+});
+
+test('Phase 11 — encodes and decodes ExaminationSetup as a valid settings envelope', () => {
+  const setup = {
+    id: 'exm-cfg-2026-custom',
+    academicYear: '2026-2027',
+    examName: 'বার্ষিক পরীক্ষা ২০২৬',
+    department: 'hifz' as const,
+    className: 'হিফযুল কুরআন (উচ্চতর)',
+    sectionName: 'ক শাখা',
+    examDate: '2026-11-15',
+    publicationDate: '2026-11-30',
+    instructions: 'সকল বিষয় বাধ্যতামূলক',
+    subjects: [
+      {
+        subjectCode: 'HFZ-101',
+        subjectName: 'হিফযুল কুরআন (তিলাওয়াত)',
+        fullMarks: 100,
+        passMarks: 40,
+        isCompulsory: true,
+      },
+    ],
+    gradingPolicy: {
+      nameBn: 'কওমি ও ক্যাডেট সমন্বিত গ্রেডিং',
+      enableGpa: true,
+      enableRank: true,
+      failIfAnySubjectFailed: true,
+      intervals: [],
+    },
+    workflowStatus: 'draft' as const,
+    authorId: 'usr-admin-1',
+  };
+
+  const envelope = encodeExamSetupAsSettingsEnvelope(setup, 'usr-admin-1');
+  const validation = validateInstitutionSettings({
+    ...envelope,
+    id: setup.id,
+  });
+  assert.equal(validation.valid, true);
+
+  const decoded = decodeExamSetupFromSettingsEnvelope(envelope, setup.id);
+  assert.ok(decoded);
+  assert.equal(decoded?.id, setup.id);
+  assert.equal(decoded?.examName, 'বার্ষিক পরীক্ষা ২০২৬');
+  assert.equal(decoded?.subjects.length, 1);
+});

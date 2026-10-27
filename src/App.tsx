@@ -61,6 +61,7 @@ import type {
   AttendanceStatus,
   BannerSlide,
   DepartmentCode,
+  ExaminationSetup,
   ExamResult,
   ExpenseRecord,
   FeeInvoice,
@@ -84,6 +85,7 @@ import type {
 import { TRANSLATIONS } from './i18n/translations';
 import {
   buildAccountProvisioningPackage,
+  buildCompleteInstitutionSettingsPayload,
   buildProvisionedStudentFromApplication,
   buildStaffAccountInvitation,
   canAccessModule,
@@ -91,35 +93,25 @@ import {
   canModifyUserAccountRoleOrStatus,
   canReplaceApprovedStudentPhoto,
   classifyLoginIdentifier,
+  decodeExamResultFromFirestore,
+  decodeExamSetupFromSettingsEnvelope,
+  encodeExamSetupAsSettingsEnvelope,
+  encodeGradeWithWorkflowMeta,
   getAllowedModules,
   isSuperAdminAlreadyProvisioned,
   mergeLinkedStudentIds,
+  reconcileFirestoreSnapshot,
   type RegistrationFormInput,
   resolvePostLoginRedirect,
   type StaffInvitationInput,
   validateAndRedeemActivationInvitation,
+  validateInstitutionSettings,
   validateSuperAdminBootstrapAttempt,
 } from './utils/madrasaLogic';
 import {
-  INITIAL_ACCOUNT_INVITATIONS,
-  INITIAL_ADMIN_AUDIT_LOGS,
-  INITIAL_ADMISSION_APPLICATIONS,
-  INITIAL_ATTENDANCE,
   INITIAL_BANNER_SLIDES,
-  INITIAL_EXAMS,
-  INITIAL_EXPENSES,
-  INITIAL_GUARDIAN_INQUIRIES,
-  INITIAL_GUARDIAN_LINK_REQUESTS,
-  INITIAL_HIFZ_LOGS,
-  INITIAL_INVOICES,
-  INITIAL_LEAVES,
-  INITIAL_NOTICES,
-  INITIAL_PAYROLL,
+  INITIAL_EXAM_SETUPS,
   INITIAL_SETTINGS,
-  INITIAL_STAFF,
-  INITIAL_STUDENTS,
-  INITIAL_STUDY_DIARY,
-  INITIAL_USERS,
 } from './data/initialSeedData';
 import {
   AdminAvatarIcon,
@@ -166,10 +158,42 @@ const MODULE_ICONS: Record<ModuleId, React.ComponentType<{ className?: string }>
   settings: Settings,
 };
 
+/**
+ * Safely reads a Firestore document when checking whether to `updateDoc` vs `setDoc`.
+ * If a legacy deployed rule evaluates `resource.data.<field>` on a non-existent document
+ * during `get`, Firestore throws `permission-denied` before `create` is attempted.
+ * Catching that lookup error and returning `null` allows the caller to proceed to `setDoc`
+ * (`allow create`), where `request.resource.data` is properly validated by Firestore Security Rules.
+ */
+async function getExistingDocIfPresent(ref: ReturnType<typeof doc>) {
+  try {
+    const snap = await getDoc(ref);
+    return snap.exists() ? snap : null;
+  } catch {
+    return null;
+  }
+}
+
 export function MadrasaPortalApp() {
-  const [language, setLanguage] = useState<Language>('bn');
+  const [language, setLanguage] = useState<Language>(() => {
+    try {
+      const saved = window.localStorage.getItem('ummul_quran_language');
+      if (saved === 'bn' || saved === 'en' || saved === 'ar') return saved;
+    } catch {
+      // ignore storage errors
+    }
+    return 'bn';
+  });
   const [activeRole, setActiveRole] = useState<UserRole>('super_admin');
-  const [activeModule, setActiveModule] = useState<ModuleId>('dashboard');
+  const [activeModule, setActiveModule] = useState<ModuleId>(() => {
+    try {
+      const saved = window.sessionStorage.getItem('ummul_quran_active_module') as ModuleId | null;
+      if (saved && saved in MODULE_ICONS) return saved;
+    } catch {
+      // ignore storage errors
+    }
+    return 'dashboard';
+  });
   const [showLoginGate, setShowLoginGate] = useState<boolean>(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState<boolean>(false);
@@ -181,42 +205,52 @@ export function MadrasaPortalApp() {
   const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [isSyncingSeed, setIsSyncingSeed] = useState<boolean>(false);
+  const [firestoreSyncStatus, setFirestoreSyncStatus] = useState<
+    'idle' | 'loading' | 'loaded' | 'error'
+  >('idle');
   const [operationError, setOperationError] = useState<string | null>(null);
   const [operationSuccess, setOperationSuccess] = useState<string | null>(null);
 
-  // Application Data State (Seeded with realistic reference data + live Firestore sync when authenticated)
-  const [students, setStudents] = useState<Student[]>(INITIAL_STUDENTS);
-  const [staff, setStaff] = useState<StaffMember[]>(INITIAL_STAFF);
-  const [attendance, setAttendance] = useState<AttendanceRecord[]>(INITIAL_ATTENDANCE);
-  const [exams, setExams] = useState<ExamResult[]>(INITIAL_EXAMS);
-  const [invoices, setInvoices] = useState<FeeInvoice[]>(INITIAL_INVOICES);
-  const [expenses, setExpenses] = useState<ExpenseRecord[]>(INITIAL_EXPENSES);
-  const [hifzLogs, setHifzLogs] = useState<HifzProgressLog[]>(INITIAL_HIFZ_LOGS);
-  const [leaves, setLeaves] = useState<ResidentialLeave[]>(INITIAL_LEAVES);
-  const [payroll, setPayroll] = useState<PayrollRecord[]>(INITIAL_PAYROLL);
-  const [notices, setNotices] = useState<Notice[]>(INITIAL_NOTICES);
+  // Production Data State — no demo/sample records merged into production collections
+  const [students, setStudents] = useState<Student[]>([]);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [exams, setExams] = useState<ExamResult[]>([]);
+  const [examSetups, setExamSetups] = useState<ExaminationSetup[]>(INITIAL_EXAM_SETUPS);
+  const [invoices, setInvoices] = useState<FeeInvoice[]>([]);
+  const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
+  const [hifzLogs, setHifzLogs] = useState<HifzProgressLog[]>([]);
+  const [leaves, setLeaves] = useState<ResidentialLeave[]>([]);
+  const [payroll, setPayroll] = useState<PayrollRecord[]>([]);
+  const [notices, setNotices] = useState<Notice[]>([]);
   const [settings, setSettings] = useState<InstitutionSettings>(INITIAL_SETTINGS);
-  const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<UserProfile[]>([]);
   const [bannerSlides, setBannerSlides] = useState<BannerSlide[]>(INITIAL_BANNER_SLIDES);
-  const [studyDiary, setStudyDiary] = useState<StudyDiaryEntry[]>(INITIAL_STUDY_DIARY);
-  const [guardianInquiries, setGuardianInquiries] = useState<GuardianInquiry[]>(
-    INITIAL_GUARDIAN_INQUIRIES
-  );
-  const [admissionApplications, setAdmissionApplications] = useState<AdmissionApplication[]>(
-    INITIAL_ADMISSION_APPLICATIONS
-  );
-  const [guardianLinkRequests, setGuardianLinkRequests] = useState<GuardianLinkRequest[]>(
-    INITIAL_GUARDIAN_LINK_REQUESTS
-  );
-  const [accountInvitations, setAccountInvitations] = useState<AccountInvitation[]>(
-    INITIAL_ACCOUNT_INVITATIONS
-  );
+  const [studyDiary, setStudyDiary] = useState<StudyDiaryEntry[]>([]);
+  const [guardianInquiries, setGuardianInquiries] = useState<GuardianInquiry[]>([]);
+  const [admissionApplications, setAdmissionApplications] = useState<AdmissionApplication[]>([]);
+  const [guardianLinkRequests, setGuardianLinkRequests] = useState<GuardianLinkRequest[]>([]);
+  const [accountInvitations, setAccountInvitations] = useState<AccountInvitation[]>([]);
   const [superAdminLock, setSuperAdminLock] = useState<SuperAdminBootstrapLock | null>(null);
-  const [adminAuditLogs, setAdminAuditLogs] = useState<AdminAuditLog[]>(
-    INITIAL_ADMIN_AUDIT_LOGS
-  );
+  const [adminAuditLogs, setAdminAuditLogs] = useState<AdminAuditLog[]>([]);
   const [isPublicAdmissionMode, setIsPublicAdmissionMode] = useState<boolean>(false);
   const [pendingInvitationCode, setPendingInvitationCode] = useState<string>('');
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('ummul_quran_language', language);
+    } catch {
+      // ignore storage errors
+    }
+  }, [language]);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem('ummul_quran_active_module', activeModule);
+    } catch {
+      // ignore storage errors
+    }
+  }, [activeModule]);
 
   const isSuperAdminProvisioned = isSuperAdminAlreadyProvisioned(superAdminLock, users);
   const t = TRANSLATIONS[language];
@@ -366,11 +400,14 @@ export function MadrasaPortalApp() {
               displayName: user.displayName || 'মাদ্রাসা ব্যবহারকারী',
               role: defaultRole,
               status: defaultStatus,
-              linkedStudentIds: isSuperAdmin ? 'stu-101,stu-103' : '',
+              linkedStudentIds: '',
               assignedClasses: isSuperAdmin ? 'সকল জামাত' : '',
               phone: '01700-000000',
             };
             setCurrentUserProfile(newProfile);
+            if (isSuperAdmin) {
+              setShowLoginGate(false);
+            }
             try {
               await setDoc(userDocRef, {
                 uid: newProfile.uid,
@@ -400,7 +437,11 @@ export function MadrasaPortalApp() {
             }
             const redirectInfo = resolvePostLoginRedirect(loadedProfile);
             if (redirectInfo.screen === 'portal') {
-              setActiveModule(redirectInfo.targetModule);
+              setActiveModule((prevModule) =>
+                canAccessModule(loadedProfile.role, prevModule)
+                  ? prevModule
+                  : redirectInfo.targetModule
+              );
               setShowLoginGate(false);
             }
           }
@@ -417,7 +458,12 @@ export function MadrasaPortalApp() {
 
   // Attach real-time Firestore listeners when authenticated
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser) return;
+    if (!isAuthReady || !firebaseUser) {
+      setFirestoreSyncStatus('idle');
+      return;
+    }
+
+    setFirestoreSyncStatus('loading');
 
     const uid = firebaseUser.uid;
     const isBootstrapAdmin = firebaseUser.email === BOOTSTRAP_SUPER_ADMIN_EMAIL;
@@ -428,6 +474,19 @@ export function MadrasaPortalApp() {
     const isStudentSession = !isTrustedAdmin && effectiveRole === 'student';
 
     const unsubscribers: (() => void)[] = [];
+    let primaryStudentsDocs: Student[] = [];
+    const linkedStudentsById = new Map<string, Student>();
+
+    const syncMergedStudents = () => {
+      const byId = new Map<string, Student>();
+      for (const s of primaryStudentsDocs) {
+        if (!s.isDemoRecord) byId.set(s.id, s);
+      }
+      for (const [id, s] of linkedStudentsById.entries()) {
+        if (!s.isDemoRecord) byId.set(id, s);
+      }
+      setStudents(Array.from(byId.values()));
+    };
 
     // 1. Students listener
     const studentsQuery = isTrustedAdmin
@@ -445,21 +504,18 @@ export function MadrasaPortalApp() {
       onSnapshot(
         studentsQuery,
         (snap) => {
-          if (!snap.empty) {
-            const docs = snap.docs.map((d) => ({
-              ...(d.data() as Student),
-              id: d.id,
-              isDemoRecord: false,
-            }));
-            setStudents((prev) => {
-              const byId = new Map<string, Student>();
-              for (const item of prev) byId.set(item.id, item);
-              for (const item of docs) byId.set(item.id, item);
-              return Array.from(byId.values());
-            });
-          }
+          setFirestoreSyncStatus('loaded');
+          primaryStudentsDocs = snap.docs.map((d) => ({
+            ...(d.data() as Student),
+            id: d.id,
+            isDemoRecord: false,
+          }));
+          syncMergedStudents();
         },
-        (err) => reportListenerError(err, OperationType.LIST, 'students')
+        (err) => {
+          setFirestoreSyncStatus('error');
+          reportListenerError(err, OperationType.LIST, 'students');
+        }
       )
     );
 
@@ -476,19 +532,15 @@ export function MadrasaPortalApp() {
             doc(db, 'students', stuId),
             (snap) => {
               if (snap.exists()) {
-                const stuDoc: Student = {
+                linkedStudentsById.set(snap.id, {
                   ...(snap.data() as Student),
                   id: snap.id,
                   isDemoRecord: false,
-                };
-                setStudents((prev) => {
-                  const exists = prev.some((s) => s.id === stuDoc.id);
-                  if (exists) {
-                    return prev.map((s) => (s.id === stuDoc.id ? stuDoc : s));
-                  }
-                  return [stuDoc, ...prev];
                 });
+              } else {
+                linkedStudentsById.delete(stuId);
               }
+              syncMergedStudents();
             },
             (err) => reportListenerError(err, OperationType.GET, `students/${stuId}`)
           )
@@ -506,14 +558,19 @@ export function MadrasaPortalApp() {
         onSnapshot(
           staffQuery,
           (snap) => {
-            if (!snap.empty) {
-              const docs = snap.docs.map((d) => ({
-                ...(d.data() as StaffMember),
-                id: d.id,
-                isDemoRecord: false,
-              }));
-              setStaff(docs);
-            }
+            const docs = snap.docs.map((d) => ({
+              ...(d.data() as StaffMember),
+              id: d.id,
+              isDemoRecord: false,
+            }));
+            setStaff((prev) =>
+              reconcileFirestoreSnapshot({
+                previousState: prev,
+                incomingDocs: docs,
+                isListenerReady: true,
+                hasListenerError: false,
+              })
+            );
           },
           (err) => reportListenerError(err, OperationType.LIST, 'staff')
         )
@@ -529,15 +586,19 @@ export function MadrasaPortalApp() {
       onSnapshot(
         noticesQuery,
         (snap) => {
-          if (!snap.empty) {
-            setNotices(
-              snap.docs.map((d) => ({
-                ...(d.data() as Notice),
-                id: d.id,
-                isDemoRecord: false,
-              }))
-            );
-          }
+          const docs = snap.docs.map((d) => ({
+            ...(d.data() as Notice),
+            id: d.id,
+            isDemoRecord: false,
+          }));
+          setNotices((prev) =>
+            reconcileFirestoreSnapshot({
+              previousState: prev,
+              incomingDocs: docs,
+              isListenerReady: true,
+              hasListenerError: false,
+            })
+          );
         },
         (err) => reportListenerError(err, OperationType.LIST, 'notices')
       )
@@ -557,31 +618,27 @@ export function MadrasaPortalApp() {
       onSnapshot(
         attendanceQuery,
         (snap) => {
-          if (!snap.empty) {
-            const cloudRecords = snap.docs.map((d) => ({
-              ...(d.data() as AttendanceRecord),
-              id: d.id,
-              isDemoRecord: false,
-            }));
-            setAttendance((prev) => {
-              const byKey = new Map<string, AttendanceRecord>();
-              for (const item of prev) {
-                byKey.set(`${item.date}-${item.studentId}`, item);
-              }
-              for (const item of cloudRecords) {
-                byKey.set(`${item.date}-${item.studentId}`, item);
-              }
-              return Array.from(byKey.values());
-            });
-          }
+          const cloudRecords = snap.docs.map((d) => ({
+            ...(d.data() as AttendanceRecord),
+            id: d.id,
+            isDemoRecord: false,
+          }));
+          setAttendance((prev) =>
+            reconcileFirestoreSnapshot({
+              previousState: prev,
+              incomingDocs: cloudRecords,
+              isListenerReady: true,
+              hasListenerError: false,
+            })
+          );
         },
         (err) => reportListenerError(err, OperationType.LIST, 'attendance')
       )
     );
 
-    // 5. Exams listener
+    // 5. Exams listener — load all academic years for admins and decode workflow metadata
     const examsQuery = isTrustedAdmin
-      ? query(collection(db, 'exams'), where('academicYear', '==', '2026-2027'))
+      ? query(collection(db, 'exams'), where('academicYear', '>=', ''))
       : isGuardianSession
         ? query(collection(db, 'exams'), where('guardianUid', '==', uid))
         : query(collection(db, 'exams'), where('authorId', '==', uid));
@@ -589,15 +646,17 @@ export function MadrasaPortalApp() {
       onSnapshot(
         examsQuery,
         (snap) => {
-          if (!snap.empty) {
-            setExams(
-              snap.docs.map((d) => ({
-                ...(d.data() as ExamResult),
-                id: d.id,
-                isDemoRecord: false,
-              }))
-            );
-          }
+          const cloudExams = snap.docs.map((d) =>
+            decodeExamResultFromFirestore(d.data() as Record<string, unknown>, d.id)
+          );
+          setExams((prev) =>
+            reconcileFirestoreSnapshot({
+              previousState: prev,
+              incomingDocs: cloudExams,
+              isListenerReady: true,
+              hasListenerError: false,
+            })
+          );
         },
         (err) => reportListenerError(err, OperationType.LIST, 'exams')
       )
@@ -613,15 +672,19 @@ export function MadrasaPortalApp() {
       onSnapshot(
         invoicesQuery,
         (snap) => {
-          if (!snap.empty) {
-            setInvoices(
-              snap.docs.map((d) => ({
-                ...(d.data() as FeeInvoice),
-                id: d.id,
-                isDemoRecord: false,
-              }))
-            );
-          }
+          const docs = snap.docs.map((d) => ({
+            ...(d.data() as FeeInvoice),
+            id: d.id,
+            isDemoRecord: false,
+          }));
+          setInvoices((prev) =>
+            reconcileFirestoreSnapshot({
+              previousState: prev,
+              incomingDocs: docs,
+              isListenerReady: true,
+              hasListenerError: false,
+            })
+          );
         },
         (err) => reportListenerError(err, OperationType.LIST, 'invoices')
       )
@@ -639,15 +702,19 @@ export function MadrasaPortalApp() {
         onSnapshot(
           expensesQuery,
           (snap) => {
-            if (!snap.empty) {
-              setExpenses(
-                snap.docs.map((d) => ({
-                  ...(d.data() as ExpenseRecord),
-                  id: d.id,
-                  isDemoRecord: false,
-                }))
-              );
-            }
+            const docs = snap.docs.map((d) => ({
+              ...(d.data() as ExpenseRecord),
+              id: d.id,
+              isDemoRecord: false,
+            }));
+            setExpenses((prev) =>
+              reconcileFirestoreSnapshot({
+                previousState: prev,
+                incomingDocs: docs,
+                isListenerReady: true,
+                hasListenerError: false,
+              })
+            );
           },
           (err) => reportListenerError(err, OperationType.LIST, 'expenses')
         )
@@ -664,15 +731,19 @@ export function MadrasaPortalApp() {
       onSnapshot(
         hifzQuery,
         (snap) => {
-          if (!snap.empty) {
-            setHifzLogs(
-              snap.docs.map((d) => ({
-                ...(d.data() as HifzProgressLog),
-                id: d.id,
-                isDemoRecord: false,
-              }))
-            );
-          }
+          const docs = snap.docs.map((d) => ({
+            ...(d.data() as HifzProgressLog),
+            id: d.id,
+            isDemoRecord: false,
+          }));
+          setHifzLogs((prev) =>
+            reconcileFirestoreSnapshot({
+              previousState: prev,
+              incomingDocs: docs,
+              isListenerReady: true,
+              hasListenerError: false,
+            })
+          );
         },
         (err) => reportListenerError(err, OperationType.LIST, 'hifzLogs')
       )
@@ -691,15 +762,19 @@ export function MadrasaPortalApp() {
       onSnapshot(
         leavesQuery,
         (snap) => {
-          if (!snap.empty) {
-            setLeaves(
-              snap.docs.map((d) => ({
-                ...(d.data() as ResidentialLeave),
-                id: d.id,
-                isDemoRecord: false,
-              }))
-            );
-          }
+          const docs = snap.docs.map((d) => ({
+            ...(d.data() as ResidentialLeave),
+            id: d.id,
+            isDemoRecord: false,
+          }));
+          setLeaves((prev) =>
+            reconcileFirestoreSnapshot({
+              previousState: prev,
+              incomingDocs: docs,
+              isListenerReady: true,
+              hasListenerError: false,
+            })
+          );
         },
         (err) => reportListenerError(err, OperationType.LIST, 'residentialLeaves')
       )
@@ -714,15 +789,19 @@ export function MadrasaPortalApp() {
         onSnapshot(
           payrollQuery,
           (snap) => {
-            if (!snap.empty) {
-              setPayroll(
-                snap.docs.map((d) => ({
-                  ...(d.data() as PayrollRecord),
-                  id: d.id,
-                  isDemoRecord: false,
-                }))
-              );
-            }
+            const docs = snap.docs.map((d) => ({
+              ...(d.data() as PayrollRecord),
+              id: d.id,
+              isDemoRecord: false,
+            }));
+            setPayroll((prev) =>
+              reconcileFirestoreSnapshot({
+                previousState: prev,
+                incomingDocs: docs,
+                isListenerReady: true,
+                hasListenerError: false,
+              })
+            );
           },
           (err) => reportListenerError(err, OperationType.LIST, 'payroll')
         )
@@ -735,13 +814,45 @@ export function MadrasaPortalApp() {
         doc(db, 'settings', 'default-settings'),
         (snap) => {
           if (snap.exists()) {
+            const data = snap.data() as InstitutionSettings;
             setSettings({
-              ...(snap.data() as InstitutionSettings),
+              ...INITIAL_SETTINGS,
+              ...data,
               id: snap.id,
             });
           }
         },
         (err) => reportListenerError(err, OperationType.GET, 'settings/default-settings')
+      )
+    );
+
+    // 11b. Examination Setup envelopes persisted in `settings` collection
+    const examSetupsQuery = query(
+      collection(db, 'settings'),
+      where('institutionNameEn', '==', 'EXAM_SETUP_CONFIG')
+    );
+    unsubscribers.push(
+      onSnapshot(
+        examSetupsQuery,
+        (snap) => {
+          const loadedSetups: ExaminationSetup[] = [];
+          for (const d of snap.docs) {
+            const decoded = decodeExamSetupFromSettingsEnvelope(
+              d.data() as Record<string, unknown>,
+              d.id
+            );
+            if (decoded) loadedSetups.push(decoded);
+          }
+          if (loadedSetups.length > 0) {
+            setExamSetups((prev) => {
+              const byId = new Map<string, ExaminationSetup>();
+              for (const s of prev) byId.set(s.id, s);
+              for (const s of loadedSetups) byId.set(s.id, s);
+              return Array.from(byId.values());
+            });
+          }
+        },
+        (err) => reportListenerError(err, OperationType.LIST, 'settings')
       )
     );
 
@@ -781,19 +892,20 @@ export function MadrasaPortalApp() {
         onSnapshot(
           usersQuery,
           (snap) => {
-            if (!snap.empty) {
-              const cloudUsers = snap.docs.map((d) => ({
-                ...(d.data() as UserProfile),
-                id: d.id,
-                uid: (d.data() as UserProfile).uid || d.id,
-              }));
-              setUsers((prev) => {
-                const byId = new Map<string, UserProfile>();
-                for (const u of prev) byId.set(u.id, u);
-                for (const u of cloudUsers) byId.set(u.id, u);
-                return Array.from(byId.values());
-              });
-            }
+            const cloudUsers = snap.docs.map((d) => ({
+              ...(d.data() as UserProfile),
+              id: d.id,
+              uid: (d.data() as UserProfile).uid || d.id,
+              isDemoRecord: false,
+            }));
+            setUsers((prev) =>
+              reconcileFirestoreSnapshot({
+                previousState: prev,
+                incomingDocs: cloudUsers,
+                isListenerReady: true,
+                hasListenerError: false,
+              })
+            );
           },
           (err) => reportListenerError(err, OperationType.LIST, 'users')
         )
@@ -823,19 +935,19 @@ export function MadrasaPortalApp() {
       onSnapshot(
         diaryQuery,
         (snap) => {
-          if (!snap.empty) {
-            const cloudEntries = snap.docs.map((d) => ({
-              ...(d.data() as StudyDiaryEntry),
-              id: d.id,
-              isDemoRecord: false,
-            }));
-            setStudyDiary((prev) => {
-              const byId = new Map<string, StudyDiaryEntry>();
-              for (const item of prev) byId.set(item.id, item);
-              for (const item of cloudEntries) byId.set(item.id, item);
-              return Array.from(byId.values());
-            });
-          }
+          const cloudEntries = snap.docs.map((d) => ({
+            ...(d.data() as StudyDiaryEntry),
+            id: d.id,
+            isDemoRecord: false,
+          }));
+          setStudyDiary((prev) =>
+            reconcileFirestoreSnapshot({
+              previousState: prev,
+              incomingDocs: cloudEntries,
+              isListenerReady: true,
+              hasListenerError: false,
+            })
+          );
         },
         (err) => reportListenerError(err, OperationType.LIST, 'studyDiary')
       )
@@ -849,25 +961,25 @@ export function MadrasaPortalApp() {
             where('status', 'in', ['open', 'replied', 'resolved'])
           )
         : isGuardianSession
-          ? query(collection(db, 'guardianInquiries'), where('guardianUid', '==', uid))
+           ? query(collection(db, 'guardianInquiries'), where('guardianUid', '==', uid))
           : query(collection(db, 'guardianInquiries'), where('authorId', '==', uid));
       unsubscribers.push(
         onSnapshot(
           inquiriesQuery,
           (snap) => {
-            if (!snap.empty) {
-              const cloudInq = snap.docs.map((d) => ({
-                ...(d.data() as GuardianInquiry),
-                id: d.id,
-                isDemoRecord: false,
-              }));
-              setGuardianInquiries((prev) => {
-                const byId = new Map<string, GuardianInquiry>();
-                for (const item of prev) byId.set(item.id, item);
-                for (const item of cloudInq) byId.set(item.id, item);
-                return Array.from(byId.values());
-              });
-            }
+            const cloudInq = snap.docs.map((d) => ({
+              ...(d.data() as GuardianInquiry),
+              id: d.id,
+              isDemoRecord: false,
+            }));
+            setGuardianInquiries((prev) =>
+              reconcileFirestoreSnapshot({
+                previousState: prev,
+                incomingDocs: cloudInq,
+                isListenerReady: true,
+                hasListenerError: false,
+              })
+            );
           },
           (err) => reportListenerError(err, OperationType.LIST, 'guardianInquiries')
         )
@@ -896,19 +1008,19 @@ export function MadrasaPortalApp() {
       onSnapshot(
         admissionsQuery,
         (snap) => {
-          if (!snap.empty) {
-            const cloudApps = snap.docs.map((d) => ({
-              ...(d.data() as AdmissionApplication),
-              id: d.id,
-              isDemoRecord: false,
-            }));
-            setAdmissionApplications((prev) => {
-              const byId = new Map<string, AdmissionApplication>();
-              for (const item of prev) byId.set(item.id, item);
-              for (const item of cloudApps) byId.set(item.id, item);
-              return Array.from(byId.values());
-            });
-          }
+          const cloudApps = snap.docs.map((d) => ({
+            ...(d.data() as AdmissionApplication),
+            id: d.id,
+            isDemoRecord: false,
+          }));
+          setAdmissionApplications((prev) =>
+            reconcileFirestoreSnapshot({
+              previousState: prev,
+              incomingDocs: cloudApps,
+              isListenerReady: true,
+              hasListenerError: false,
+            })
+          );
         },
         (err) => reportListenerError(err, OperationType.LIST, 'admissionApplications')
       )
@@ -929,19 +1041,19 @@ export function MadrasaPortalApp() {
         onSnapshot(
           linkReqQuery,
           (snap) => {
-            if (!snap.empty) {
-              const cloudReqs = snap.docs.map((d) => ({
-                ...(d.data() as GuardianLinkRequest),
-                id: d.id,
-                isDemoRecord: false,
-              }));
-              setGuardianLinkRequests((prev) => {
-                const byId = new Map<string, GuardianLinkRequest>();
-                for (const item of prev) byId.set(item.id, item);
-                for (const item of cloudReqs) byId.set(item.id, item);
-                return Array.from(byId.values());
-              });
-            }
+            const cloudReqs = snap.docs.map((d) => ({
+              ...(d.data() as GuardianLinkRequest),
+              id: d.id,
+              isDemoRecord: false,
+            }));
+            setGuardianLinkRequests((prev) =>
+              reconcileFirestoreSnapshot({
+                previousState: prev,
+                incomingDocs: cloudReqs,
+                isListenerReady: true,
+                hasListenerError: false,
+              })
+            );
           },
           (err) => reportListenerError(err, OperationType.LIST, 'guardianLinkRequests')
         )
@@ -954,19 +1066,19 @@ export function MadrasaPortalApp() {
         onSnapshot(
           collection(db, 'accountInvitations'),
           (snap) => {
-            if (!snap.empty) {
-              const cloudInvites = snap.docs.map((d) => ({
-                ...(d.data() as AccountInvitation),
-                id: d.id,
-                isDemoRecord: false,
-              }));
-              setAccountInvitations((prev) => {
-                const byId = new Map<string, AccountInvitation>();
-                for (const item of prev) byId.set(item.id, item);
-                for (const item of cloudInvites) byId.set(item.id, item);
-                return Array.from(byId.values());
-              });
-            }
+            const cloudInvites = snap.docs.map((d) => ({
+              ...(d.data() as AccountInvitation),
+              id: d.id,
+              isDemoRecord: false,
+            }));
+            setAccountInvitations((prev) =>
+              reconcileFirestoreSnapshot({
+                previousState: prev,
+                incomingDocs: cloudInvites,
+                isListenerReady: true,
+                hasListenerError: false,
+              })
+            );
           },
           (err) => reportListenerError(err, OperationType.LIST, 'accountInvitations')
         )
@@ -998,20 +1110,19 @@ export function MadrasaPortalApp() {
         onSnapshot(
           collection(db, 'adminAuditLogs'),
           (snap) => {
-            if (!snap.empty) {
-              const cloudLogs = snap.docs.map((d) => ({
-                ...(d.data() as AdminAuditLog),
-                id: d.id,
-              }));
-              setAdminAuditLogs((prev) => {
-                const byId = new Map<string, AdminAuditLog>();
-                for (const item of prev) byId.set(item.id, item);
-                for (const item of cloudLogs) byId.set(item.id, item);
-                return Array.from(byId.values()).sort((a, b) =>
-                  b.timestamp.localeCompare(a.timestamp)
-                );
-              });
-            }
+            const cloudLogs = snap.docs.map((d) => ({
+              ...(d.data() as AdminAuditLog),
+              id: d.id,
+              isDemoRecord: false,
+            }));
+            setAdminAuditLogs((prev) =>
+              reconcileFirestoreSnapshot({
+                previousState: prev,
+                incomingDocs: cloudLogs,
+                isListenerReady: true,
+                hasListenerError: false,
+              }).sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+            );
           },
           (err) => reportListenerError(err, OperationType.LIST, 'adminAuditLogs')
         )
@@ -1374,8 +1485,8 @@ export function MadrasaPortalApp() {
     if (firebaseUser) {
       const stuRef = doc(db, 'students', studentId);
       try {
-        const snap = await getDoc(stuRef);
-        if (snap.exists()) {
+        const snap = await getExistingDocIfPresent(stuRef);
+        if (snap) {
           await updateDoc(stuRef, {
             status,
             updatedAt: serverTimestamp(),
@@ -1424,8 +1535,8 @@ export function MadrasaPortalApp() {
     if (firebaseUser) {
       const stuRef = doc(db, 'students', studentId);
       try {
-        const snap = await getDoc(stuRef);
-        if (snap.exists()) {
+        const snap = await getExistingDocIfPresent(stuRef);
+        if (snap) {
           await updateDoc(stuRef, {
             photoUrl,
             updatedAt: serverTimestamp(),
@@ -2343,8 +2454,8 @@ export function MadrasaPortalApp() {
     if (firebaseUser) {
       const ref = doc(db, 'studyDiary', entryId);
       try {
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
+        const snap = await getExistingDocIfPresent(ref);
+        if (snap) {
           await updateDoc(ref, {
             completionStatus,
             updatedAt: serverTimestamp(),
@@ -2420,8 +2531,8 @@ export function MadrasaPortalApp() {
     if (firebaseUser) {
       const ref = doc(db, 'guardianInquiries', inquiryId);
       try {
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
+        const snap = await getExistingDocIfPresent(ref);
+        if (snap) {
           await updateDoc(ref, {
             teacherReply: replyText,
             status: 'replied',
@@ -2528,9 +2639,9 @@ export function MadrasaPortalApp() {
     if (firebaseUser) {
       const appRef = doc(db, 'admissionApplications', applicationId);
       try {
-        const snap = await getDoc(appRef);
+        const snap = await getExistingDocIfPresent(appRef);
         const { id, isDemoRecord, createdAt, updatedAt, ...cleanPayload } = merged;
-        if (snap.exists()) {
+        if (snap) {
           await updateDoc(appRef, {
             ...cleanPayload,
             updatedAt: serverTimestamp(),
@@ -2579,6 +2690,7 @@ export function MadrasaPortalApp() {
     if (!canApproveAdmissions(activeRole)) {
       throw new Error('Unauthorized admission approval attempt');
     }
+    setOperationError(null);
 
     const uid = firebaseUser?.uid || 'usr-muhtamim-1';
     const todayIso = new Date().toISOString().slice(0, 10);
@@ -2631,83 +2743,111 @@ export function MadrasaPortalApp() {
     };
 
     if (firebaseUser) {
-      const stuRef = doc(db, 'students', provisioned.studentRecord.id);
-      const {
-        id: stuId,
-        isDemoRecord: stuDemo,
-        createdAt: stuCreated,
-        updatedAt: stuUpdated,
-        ...stuRest
-      } = provisioned.studentRecord;
-
-      const stuSnap = await getDoc(stuRef);
-      if (stuSnap.exists()) {
-        await updateDoc(stuRef, {
-          ...stuRest,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(stuRef, {
-          ...stuRest,
-          authorId: uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-
-      const appRef = doc(db, 'admissionApplications', finalApp.id);
-      const {
-        id: appId,
-        isDemoRecord: appDemo,
-        createdAt: appCreated,
-        updatedAt: appUpdated,
-        ...appRest
-      } = finalApp;
-      const appSnap = await getDoc(appRef);
-      if (appSnap.exists()) {
-        await updateDoc(appRef, {
-          ...appRest,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(appRef, {
-          ...appRest,
-          authorId: uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-
-      const stuInvRef = doc(db, 'accountInvitations', invPkg.studentInvitation.id);
-      const {
-        id: sInvId,
-        isDemoRecord: sInvDemo,
-        createdAt: sInvCreated,
-        updatedAt: sInvUpdated,
-        ...sInvRest
-      } = invPkg.studentInvitation;
-      await setDoc(stuInvRef, {
-        ...sInvRest,
-        authorId: uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-
-      if (invPkg.guardianInvitation) {
-        const grdInvRef = doc(db, 'accountInvitations', invPkg.guardianInvitation.id);
+      try {
+        const stuRef = doc(db, 'students', provisioned.studentRecord.id);
         const {
-          id: gInvId,
-          isDemoRecord: gInvDemo,
-          createdAt: gInvCreated,
-          updatedAt: gInvUpdated,
-          ...gInvRest
-        } = invPkg.guardianInvitation;
-        await setDoc(grdInvRef, {
-          ...gInvRest,
+          id: stuId,
+          isDemoRecord: stuDemo,
+          createdAt: stuCreated,
+          updatedAt: stuUpdated,
+          ...stuRest
+        } = provisioned.studentRecord;
+
+        const stuSnap = await getExistingDocIfPresent(stuRef);
+        if (stuSnap) {
+          await updateDoc(stuRef, {
+            ...stuRest,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(stuRef, {
+            ...stuRest,
+            authorId: uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        const appRef = doc(db, 'admissionApplications', finalApp.id);
+        const {
+          id: appId,
+          isDemoRecord: appDemo,
+          createdAt: appCreated,
+          updatedAt: appUpdated,
+          ...appRest
+        } = finalApp;
+        const appSnap = await getExistingDocIfPresent(appRef);
+        if (appSnap) {
+          await updateDoc(appRef, {
+            ...appRest,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(appRef, {
+            ...appRest,
+            authorId: uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        const stuInvRef = doc(db, 'accountInvitations', invPkg.studentInvitation.id);
+        const {
+          id: sInvId,
+          isDemoRecord: sInvDemo,
+          createdAt: sInvCreated,
+          updatedAt: sInvUpdated,
+          ...sInvRest
+        } = invPkg.studentInvitation;
+        await setDoc(stuInvRef, {
+          ...sInvRest,
           authorId: uid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+
+        if (invPkg.guardianInvitation) {
+          const grdInvRef = doc(db, 'accountInvitations', invPkg.guardianInvitation.id);
+          const {
+            id: gInvId,
+            isDemoRecord: gInvDemo,
+            createdAt: gInvCreated,
+            updatedAt: gInvUpdated,
+            ...gInvRest
+          } = invPkg.guardianInvitation;
+          await setDoc(grdInvRef, {
+            ...gInvRest,
+            authorId: uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        // Persist guardian account link in Firestore if guardianUid is present
+        if (finalApp.requestGuardianAccount && finalApp.guardianUid) {
+          const grdUserRef = doc(db, 'users', finalApp.guardianUid);
+          const grdSnap = await getExistingDocIfPresent(grdUserRef);
+          if (grdSnap) {
+            const grdData = grdSnap.data() as UserProfile;
+            const mergedIds = mergeLinkedStudentIds(
+              grdData.linkedStudentIds || '',
+              provisioned.studentRecord.id
+            );
+            await updateDoc(grdUserRef, {
+              status: 'active',
+              linkedStudentIds: mergedIds,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+      } catch (err) {
+        reportDatabaseError(
+          err,
+          OperationType.WRITE,
+          `admissionApplications/${finalApp.id}`,
+          'ভর্তি অনুমোদন ও শিক্ষার্থী প্রোফাইল ডাটাবেসে সংরক্ষণ ব্যর্থ হয়েছে'
+        );
+        throw err;
       }
     }
 
@@ -2759,6 +2899,14 @@ export function MadrasaPortalApp() {
         )
       );
     }
+
+    await recordAdminAuditLog({
+      action: 'admission_approved',
+      targetUid: provisioned.studentRecord.id,
+      targetEmail: finalApp.guardianEmail || '',
+      targetRole: 'student',
+      summaryBn: `ভর্তি আবেদন (${finalApp.applicantNameBn} · দাখিলা #${provisioned.studentRecord.admissionNo}) অনুমোদিত ও শিক্ষার্থী প্রোফাইল তৈরি হয়েছে।`,
+    });
 
     return {
       studentId: provisioned.studentRecord.id,
@@ -3444,6 +3592,7 @@ export function MadrasaPortalApp() {
     adminNotes: string
   ): Promise<void> => {
     if (!canApproveAdmissions(activeRole)) return;
+    setOperationError(null);
     const uid = firebaseUser?.uid || 'usr-muhtamim-1';
     const todayIso = new Date().toISOString().slice(0, 10);
 
@@ -3457,21 +3606,72 @@ export function MadrasaPortalApp() {
     };
 
     if (firebaseUser) {
-      const reqRef = doc(db, 'guardianLinkRequests', request.id);
-      const { id, isDemoRecord, createdAt, updatedAt, ...cleanReq } = updatedReq;
-      const snap = await getDoc(reqRef);
-      if (snap.exists()) {
-        await updateDoc(reqRef, {
-          ...cleanReq,
-          updatedAt: serverTimestamp(),
-        });
-      } else {
-        await setDoc(reqRef, {
-          ...cleanReq,
-          authorId: uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+      try {
+        const reqRef = doc(db, 'guardianLinkRequests', request.id);
+        const { id, isDemoRecord, createdAt, updatedAt, ...cleanReq } = updatedReq;
+        const snap = await getExistingDocIfPresent(reqRef);
+        if (snap) {
+          await updateDoc(reqRef, {
+            ...cleanReq,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(reqRef, {
+            ...cleanReq,
+            authorId: uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        if (decision === 'approved' && updatedReq.matchedStudentId) {
+          const targetStuId = updatedReq.matchedStudentId;
+          const stuRef = doc(db, 'students', targetStuId);
+          const stuSnap = await getExistingDocIfPresent(stuRef);
+          if (stuSnap) {
+            await updateDoc(stuRef, {
+              guardianUid: request.guardianUid,
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            const targetStu = students.find((s) => s.id === targetStuId);
+            if (targetStu) {
+              const { id: sId, isDemoRecord: sDemo, createdAt: sCr, updatedAt: sUp, ...sRest } = targetStu;
+              await setDoc(stuRef, {
+                ...sRest,
+                guardianUid: request.guardianUid,
+                authorId: uid,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+            }
+          }
+
+          if (request.guardianUid) {
+            const grdRef = doc(db, 'users', request.guardianUid);
+            const grdSnap = await getExistingDocIfPresent(grdRef);
+            if (grdSnap) {
+              const grdData = grdSnap.data() as UserProfile;
+              const mergedIds = mergeLinkedStudentIds(
+                grdData.linkedStudentIds || '',
+                targetStuId
+              );
+              await updateDoc(grdRef, {
+                status: 'active',
+                linkedStudentIds: mergedIds,
+                updatedAt: serverTimestamp(),
+              });
+            }
+          }
+        }
+      } catch (err) {
+        reportDatabaseError(
+          err,
+          OperationType.WRITE,
+          `guardianLinkRequests/${request.id}`,
+          'অভিভাবক সংযুক্তি আবেদন ও শিক্ষার্থী লিংকিং সংরক্ষণ ব্যর্থ হয়েছে'
+        );
+        throw err;
       }
     }
 
@@ -3491,6 +3691,7 @@ export function MadrasaPortalApp() {
           u.id === request.guardianUid || u.uid === request.guardianUid
             ? {
                 ...u,
+                status: 'active',
                 linkedStudentIds: mergeLinkedStudentIds(
                   u.linkedStudentIds,
                   targetStuId
@@ -4069,14 +4270,17 @@ export function MadrasaPortalApp() {
                 students={students}
                 exams={exams}
                 settings={settings}
+                examSetups={examSetups}
                 actorUid={firebaseUser?.uid || 'usr-muhtamim-1'}
                 actorName={
                   currentUserProfile?.displayName ||
-                  'মাওলানা মুফতি আব্দুল মতিন কাসেমী'
+                  firebaseUser?.displayName ||
+                  'অনুমোদিত পরীক্ষক / মুহতামিম'
                 }
                 onAddExamResult={handleAddExamResult}
                 onTogglePublishExam={handleTogglePublishExam}
                 onBulkUpsertExamResults={handleBulkUpsertExamResults}
+                onSaveExamSetup={handleSaveExamSetup}
               />
             )}
 

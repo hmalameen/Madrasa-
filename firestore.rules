@@ -998,11 +998,12 @@ service cloud.firestore {
 
     match /settings/{settingId} {
       allow get: if isSignedIn() && isValidId(settingId) && (
-        existing().defaultLanguage in ['bn', 'en', 'ar'] ||
-        isAdmin()
+        isAdmin() ||
+        (resource != null && existing().defaultLanguage in ['bn', 'en', 'ar'])
       );
       allow list: if isSignedIn() && (
         existing().defaultLanguage in ['bn', 'en', 'ar'] ||
+        existing().institutionNameEn == 'EXAM_SETUP_CONFIG' ||
         existing().authorId == request.auth.uid
       );
       allow create: if isSignedIn() && isValidId(settingId) && isValidInstitutionSettings(incoming()) &&
@@ -1026,8 +1027,8 @@ service cloud.firestore {
 
     match /bannerSlides/{slideId} {
       allow get: if isSignedIn() && isValidId(slideId) && (
-        existing().theme in ['emerald', 'navy', 'ivory'] ||
-        isAdmin()
+        isAdmin() ||
+        (resource != null && existing().theme in ['emerald', 'navy', 'ivory'])
       );
       allow list: if isSignedIn() && (
         existing().theme in ['emerald', 'navy', 'ivory'] ||

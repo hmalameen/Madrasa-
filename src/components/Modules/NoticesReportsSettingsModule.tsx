@@ -19,6 +19,7 @@ import {
   canModifyUserAccountRoleOrStatus,
   formatBdt,
   generateCsvContent,
+  validateInstitutionSettings,
 } from '../../utils/madrasaLogic';
 
 // --- MODULE 11: NOTICES & COMMUNICATION ---
@@ -934,137 +935,184 @@ export function SettingsModule({
               ৩. ড্যাশবোর্ড ব্যানার স্লাইডার কনফিগারেশন (Dashboard Banner Carousel)
             </h2>
             <p className="text-xs text-slate-600 mt-0.5">
-              ড্যাশবোর্ডের স্বাগতম ক্যারোসেলে প্রদর্শিত একাডেমিক ঘোষণা, পরীক্ষার সময়সূচি ও ভর্তি বিজ্ঞপ্তির স্লাইডসমূহ সম্পাদনা করুন।
+              ড্যাশবোর্ডের স্বাগতম ক্যারোসেলে প্রদর্শিত একাডেমিক ঘোষণা, পরীক্ষার সময়সূচি ও ভর্তি বিজ্ঞপ্তির স্লাইডসমূহ সম্পাদনা করে সংরক্ষণ করুন।
             </p>
           </div>
         </div>
 
+        {slideSaveError && (
+          <div
+            role="alert"
+            className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-900"
+          >
+            {slideSaveError}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {bannerSlides.map((slide, idx) => (
-            <div
-              key={slide.id}
-              className="p-4 rounded-xl border border-stone-200 bg-[#FAF8F5] space-y-3"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-bold text-[#0B3B2E] font-mono">
-                  স্লাইড #{idx + 1} · {slide.category.toUpperCase()}
-                </span>
-                <div className="flex items-center gap-2">
-                  <select
-                    aria-label={`Theme for slide ${idx + 1}`}
-                    disabled={!isAdmin}
-                    value={slide.theme}
-                    onChange={(e) =>
-                      onUpdateBannerSlide({
-                        ...slide,
-                        theme: e.target.value as BannerSlide['theme'],
-                      })
-                    }
-                    className="px-2 py-1 text-xs bg-white border border-stone-300 rounded-md font-medium"
-                  >
-                    <option value="emerald">Deep Emerald</option>
-                    <option value="navy">Dark Navy</option>
-                    <option value="ivory">Warm Ivory</option>
-                  </select>
-                  <label className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
+          {bannerSlides.map((slide, idx) => {
+            const draft = slideDrafts[slide.id] || slide;
+            const isSlideSaving = savingSlideId === slide.id;
+            const isSlideSaved = savedSlideId === slide.id;
+            return (
+              <div
+                key={slide.id}
+                className="p-4 rounded-xl border border-stone-200 bg-[#FAF8F5] space-y-3"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-[#0B3B2E] font-mono">
+                    স্লাইড #{idx + 1} · {draft.category.toUpperCase()}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <select
+                      aria-label={`Theme for slide ${idx + 1}`}
                       disabled={!isAdmin}
-                      checked={slide.isActive}
+                      value={draft.theme}
                       onChange={(e) =>
-                        onUpdateBannerSlide({
-                          ...slide,
-                          isActive: e.target.checked,
-                        })
+                        setSlideDrafts((prev) => ({
+                          ...prev,
+                          [slide.id]: {
+                            ...draft,
+                            theme: e.target.value as BannerSlide['theme'],
+                          },
+                        }))
                       }
-                      className="rounded border-stone-300 text-[#0B3B2E]"
+                      className="px-2 py-1 text-xs bg-white border border-stone-300 rounded-md font-medium"
+                    >
+                      <option value="emerald">Deep Emerald</option>
+                      <option value="navy">Dark Navy</option>
+                      <option value="ivory">Warm Ivory</option>
+                    </select>
+                    <label className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        disabled={!isAdmin}
+                        checked={draft.isActive}
+                        onChange={(e) =>
+                          setSlideDrafts((prev) => ({
+                            ...prev,
+                            [slide.id]: {
+                              ...draft,
+                              isActive: e.target.checked,
+                            },
+                          }))
+                        }
+                        className="rounded border-stone-300 text-[#0B3B2E]"
+                      />
+                      <span>সক্রিয়</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor={`slide-title-${slide.id}`}
+                    className="block text-[11px] font-semibold text-slate-700 mb-1"
+                  >
+                    শিরোনাম (বাংলা)
+                  </label>
+                  <input
+                    id={`slide-title-${slide.id}`}
+                    type="text"
+                    disabled={!isAdmin}
+                    value={draft.titleBn}
+                    onChange={(e) =>
+                      setSlideDrafts((prev) => ({
+                        ...prev,
+                        [slide.id]: { ...draft, titleBn: e.target.value },
+                      }))
+                    }
+                    className="w-full px-3 py-1.5 text-xs bg-white border border-stone-300 rounded-lg"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor={`slide-desc-${slide.id}`}
+                    className="block text-[11px] font-semibold text-slate-700 mb-1"
+                  >
+                    সংক্ষিপ্ত বিবরণ (বাংলা)
+                  </label>
+                  <textarea
+                    id={`slide-desc-${slide.id}`}
+                    rows={2}
+                    disabled={!isAdmin}
+                    value={draft.descriptionBn}
+                    onChange={(e) =>
+                      setSlideDrafts((prev) => ({
+                        ...prev,
+                        [slide.id]: { ...draft, descriptionBn: e.target.value },
+                      }))
+                    }
+                    className="w-full px-3 py-1.5 text-xs bg-white border border-stone-300 rounded-lg"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label
+                      htmlFor={`slide-badge-${slide.id}`}
+                      className="block text-[11px] font-semibold text-slate-700 mb-1"
+                    >
+                      বিভাগ ব্যাজ
+                    </label>
+                    <input
+                      id={`slide-badge-${slide.id}`}
+                      type="text"
+                      disabled={!isAdmin}
+                      value={draft.badgeBn}
+                      onChange={(e) =>
+                        setSlideDrafts((prev) => ({
+                          ...prev,
+                          [slide.id]: { ...draft, badgeBn: e.target.value },
+                        }))
+                      }
+                      className="w-full px-2.5 py-1 text-xs bg-white border border-stone-300 rounded-lg"
                     />
-                    <span>সক্রিয়</span>
-                  </label>
+                  </div>
+                  <div>
+                    <label
+                      htmlFor={`slide-date-${slide.id}`}
+                      className="block text-[11px] font-semibold text-slate-700 mb-1"
+                    >
+                      তারিখ / সময়সূচি মেটা
+                    </label>
+                    <input
+                      id={`slide-date-${slide.id}`}
+                      type="text"
+                      disabled={!isAdmin}
+                      value={draft.metaDate}
+                      onChange={(e) =>
+                        setSlideDrafts((prev) => ({
+                          ...prev,
+                          [slide.id]: { ...draft, metaDate: e.target.value },
+                        }))
+                      }
+                      className="w-full px-2.5 py-1 text-xs font-mono bg-white border border-stone-300 rounded-lg"
+                    />
+                  </div>
                 </div>
-              </div>
 
-              <div>
-                <label
-                  htmlFor={`slide-title-${slide.id}`}
-                  className="block text-[11px] font-semibold text-slate-700 mb-1"
-                >
-                  শিরোনাম (বাংলা)
-                </label>
-                <input
-                  id={`slide-title-${slide.id}`}
-                  type="text"
-                  disabled={!isAdmin}
-                  value={slide.titleBn}
-                  onChange={(e) =>
-                    onUpdateBannerSlide({ ...slide, titleBn: e.target.value })
-                  }
-                  className="w-full px-3 py-1.5 text-xs bg-white border border-stone-300 rounded-lg"
-                />
+                {isAdmin && (
+                  <div className="pt-2 flex items-center justify-end gap-2">
+                    {isSlideSaved && (
+                      <span className="text-[11px] font-semibold text-emerald-800">
+                        সংরক্ষিত হয়েছে
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      disabled={isSlideSaving}
+                      onClick={() => handleSaveSlideDraft(slide.id)}
+                      className="px-3.5 py-1.5 text-xs font-semibold bg-[#0B3B2E] hover:bg-emerald-950 disabled:opacity-60 text-white rounded-lg cursor-pointer"
+                    >
+                      {isSlideSaving ? 'সংরক্ষণ হচ্ছে...' : 'স্লাইড সংরক্ষণ করুন'}
+                    </button>
+                  </div>
+                )}
               </div>
-
-              <div>
-                <label
-                  htmlFor={`slide-desc-${slide.id}`}
-                  className="block text-[11px] font-semibold text-slate-700 mb-1"
-                >
-                  সংক্ষিপ্ত বিবরণ (বাংলা)
-                </label>
-                <textarea
-                  id={`slide-desc-${slide.id}`}
-                  rows={2}
-                  disabled={!isAdmin}
-                  value={slide.descriptionBn}
-                  onChange={(e) =>
-                    onUpdateBannerSlide({
-                      ...slide,
-                      descriptionBn: e.target.value,
-                    })
-                  }
-                  className="w-full px-3 py-1.5 text-xs bg-white border border-stone-300 rounded-lg"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label
-                    htmlFor={`slide-badge-${slide.id}`}
-                    className="block text-[11px] font-semibold text-slate-700 mb-1"
-                  >
-                    বিভাগ ব্যাজ
-                  </label>
-                  <input
-                    id={`slide-badge-${slide.id}`}
-                    type="text"
-                    disabled={!isAdmin}
-                    value={slide.badgeBn}
-                    onChange={(e) =>
-                      onUpdateBannerSlide({ ...slide, badgeBn: e.target.value })
-                    }
-                    className="w-full px-2.5 py-1 text-xs bg-white border border-stone-300 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor={`slide-date-${slide.id}`}
-                    className="block text-[11px] font-semibold text-slate-700 mb-1"
-                  >
-                    তারিখ / সময়সূচি মেটা
-                  </label>
-                  <input
-                    id={`slide-date-${slide.id}`}
-                    type="text"
-                    disabled={!isAdmin}
-                    value={slide.metaDate}
-                    onChange={(e) =>
-                      onUpdateBannerSlide({ ...slide, metaDate: e.target.value })
-                    }
-                    className="w-full px-2.5 py-1 text-xs font-mono bg-white border border-stone-300 rounded-lg"
-                  />
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

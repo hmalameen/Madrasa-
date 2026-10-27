@@ -126,14 +126,11 @@ export function ExamsModule({
     propSetups && propSetups.length > 0 ? propSetups : INITIAL_EXAM_SETUPS
   );
   const [localAuditLogs, setLocalAuditLogs] = useState<ExamAuditLog[]>(
-    propAuditLogs && propAuditLogs.length > 0
-      ? propAuditLogs
-      : INITIAL_EXAM_AUDIT_LOGS
+    propAuditLogs ?? []
   );
 
   const activeSetups = propSetups && propSetups.length > 0 ? propSetups : localSetups;
-  const activeAuditLogs =
-    propAuditLogs && propAuditLogs.length > 0 ? propAuditLogs : localAuditLogs;
+  const activeAuditLogs = propAuditLogs ?? localAuditLogs;
 
   const [activeTab, setActiveTab] = useState<ExamWorkspaceTab>('bulk_entry');
 
@@ -1000,11 +997,18 @@ export function ExamsModule({
       return;
     }
 
-    setLocalSetups((prev) => [candidate, ...prev]);
-    setSelectedSetupId(candidate.id);
     if (onSaveExamSetup) {
-      await onSaveExamSetup(candidate);
+      const ok = await onSaveExamSetup(candidate);
+      if (!ok) {
+        setStatusBanner({
+          type: 'error',
+          message: `পরীক্ষা কনফিগারেশন "${candidate.examName}" ডাটাবেসে সংরক্ষণ ব্যর্থ হয়েছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।`,
+        });
+        return;
+      }
     }
+    setLocalSetups((prev) => [candidate, ...prev.filter((s) => s.id !== candidate.id)]);
+    setSelectedSetupId(candidate.id);
     await appendAuditLog({
       action: 'setup_saved',
       examName: candidate.examName,
@@ -1018,7 +1022,7 @@ export function ExamsModule({
     });
     setStatusBanner({
       type: 'success',
-      message: `পরীক্ষা কনফিগারেশন "${candidate.examName}" সফলভাবে সংরক্ষিত ও সক্রিয় করা হয়েছে।`,
+      message: `পরীক্ষা কনফিগারেশন "${candidate.examName}" সফলভাবে ডাটাবেসে সংরক্ষিত ও সক্রিয় করা হয়েছে।`,
     });
   };
 

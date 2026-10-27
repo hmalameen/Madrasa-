@@ -2744,4 +2744,424 @@ export function buildStaffAccountInvitation(
   };
 }
 
+// ============================================================================
+// Phase 11 — Production Persistence, Settings Validation & Snapshot Reconciliation
+// ============================================================================
+
+export function validateInstitutionSettings(
+  input: Partial<{
+    institutionNameBn: string;
+    institutionNameEn: string;
+    institutionNameAr: string;
+    academicYear: string;
+    hijriYear: string;
+    addressBn: string;
+    phone: string;
+    email: string;
+    defaultLanguage: Language;
+    activeDepartments: string;
+    gradingSystem: string;
+  }>
+): ValidationResult & { errorBn?: string } {
+  const errors: Record<string, string> = {};
+
+  const nameBn = (input.institutionNameBn || '').trim();
+  if (!nameBn) {
+    errors.institutionNameBn = 'মাদ্রাসার বাংলা নাম আবশ্যক (Bengali institution name is required)';
+  } else if (nameBn.length > 300) {
+    errors.institutionNameBn = 'মাদ্রাসার বাংলা নাম ৩০০ অক্ষরের বেশি হতে পারবে না';
+  }
+
+  const nameEn = (input.institutionNameEn || '').trim();
+  if (!nameEn) {
+    errors.institutionNameEn = 'মাদ্রাসার ইংরেজি নাম আবশ্যক (English institution name is required)';
+  } else if (nameEn.length > 300) {
+    errors.institutionNameEn = 'মাদ্রাসার ইংরেজি নাম ৩০০ অক্ষরের বেশি হতে পারবে না';
+  }
+
+  const nameAr = (input.institutionNameAr || '').trim();
+  if (nameAr.length > 300) {
+    errors.institutionNameAr = 'আরবি নাম ৩০০ অক্ষরের বেশি হতে পারবে না';
+  }
+
+  const academicYear = (input.academicYear || '').trim();
+  if (academicYear.length < 2 || academicYear.length > 100) {
+    errors.academicYear = 'বৈধ শিক্ষাবর্ষ উল্লেখ করুন (কমপক্ষে ২ অক্ষর)';
+  }
+
+  if ((input.hijriYear || '').trim().length > 100) {
+    errors.hijriYear = 'হিজরি সন ১০০ অক্ষরের বেশি হতে পারবে না';
+  }
+
+  if ((input.addressBn || '').trim().length > 500) {
+    errors.addressBn = 'ঠিকানা ৫০০ অক্ষরের বেশি হতে পারবে না';
+  }
+
+  if ((input.phone || '').trim().length > 100) {
+    errors.phone = 'ফোন নম্বর ১০০ অক্ষরের বেশি হতে পারবে না';
+  }
+
+  const email = (input.email || '').trim();
+  if (email.length > 200) {
+    errors.email = 'ইমেইল ২০০ অক্ষরের বেশি হতে পারবে না';
+  } else if (email && !email.includes('@') && input.institutionNameEn !== 'EXAM_SETUP_CONFIG') {
+    errors.email = 'বৈধ দাপ্তরিক ইমেইল ঠিকানা প্রদান করুন';
+  }
+
+  if (
+    input.defaultLanguage !== undefined &&
+    !['bn', 'en', 'ar'].includes(input.defaultLanguage)
+  ) {
+    errors.defaultLanguage = 'ডিফল্ট ভাষা অবশ্যই bn, en অথবা ar হতে হবে';
+  }
+
+  if ((input.activeDepartments || '').trim().length > 400) {
+    errors.activeDepartments = 'সক্রিয় বিভাগসমূহ ৪০০ অক্ষরের বেশি হতে পারবে না';
+  }
+
+  if ((input.gradingSystem || '').trim().length > 800) {
+    errors.gradingSystem = 'গ্রেডিং নীতিমালা ৮০০ অক্ষরের বেশি হতে পারবে না';
+  }
+
+  const firstError = Object.values(errors)[0];
+  return {
+    valid: Object.keys(errors).length === 0,
+    errors,
+    ...(firstError ? { errorBn: firstError } : {}),
+  };
+}
+
+export function buildCompleteInstitutionSettingsPayload(
+  arg1:
+    | {
+        updated: Partial<InstitutionSettings>;
+        existing?: Partial<InstitutionSettings>;
+        authorId?: string;
+      }
+    | Partial<InstitutionSettings>,
+  arg2?: Partial<InstitutionSettings>,
+  arg3?: string
+): {
+  institutionNameBn: string;
+  institutionNameEn: string;
+  institutionNameAr: string;
+  academicYear: string;
+  hijriYear: string;
+  addressBn: string;
+  phone: string;
+  email: string;
+  defaultLanguage: Language;
+  activeDepartments: string;
+  gradingSystem: string;
+  authorId: string;
+} {
+  const isWrapperObject =
+    arg1 &&
+    typeof arg1 === 'object' &&
+    'updated' in arg1 &&
+    arg1.updated !== undefined;
+
+  const updated: Partial<InstitutionSettings> = isWrapperObject
+    ? (arg1 as { updated: Partial<InstitutionSettings> }).updated
+    : (arg1 as Partial<InstitutionSettings>) || {};
+  const existing: Partial<InstitutionSettings> = isWrapperObject
+    ? (arg1 as { existing?: Partial<InstitutionSettings> }).existing || {}
+    : arg2 || {};
+  const fallbackAuthorId: string = isWrapperObject
+    ? (arg1 as { authorId?: string }).authorId || 'usr-admin-1'
+    : arg3 || 'usr-admin-1';
+
+  const rawLang = updated.defaultLanguage || existing.defaultLanguage || 'bn';
+  const safeLang: Language = ['bn', 'en', 'ar'].includes(rawLang) ? rawLang : 'bn';
+
+  const updatedActiveDepts = (updated.activeDepartments || '').trim();
+  const existingActiveDepts = (existing.activeDepartments || '').trim();
+
+  return {
+    institutionNameBn: (updated.institutionNameBn ?? existing.institutionNameBn ?? '').trim(),
+    institutionNameEn: (updated.institutionNameEn ?? existing.institutionNameEn ?? '').trim(),
+    institutionNameAr: (updated.institutionNameAr ?? existing.institutionNameAr ?? '').trim(),
+    academicYear: (updated.academicYear ?? existing.academicYear ?? '').trim(),
+    hijriYear: (updated.hijriYear ?? existing.hijriYear ?? '').trim(),
+    addressBn: (updated.addressBn ?? existing.addressBn ?? '').trim(),
+    phone: (updated.phone ?? existing.phone ?? '').trim(),
+    email: (updated.email ?? existing.email ?? '').trim(),
+    defaultLanguage: safeLang,
+    activeDepartments:
+      updatedActiveDepts ||
+      existingActiveDepts ||
+      'হিফযুল কুরআন, কওমি কিতাব বিভাগ, জেনারেল ক্যাডেট বিভাগ',
+    gradingSystem: (updated.gradingSystem ?? existing.gradingSystem ?? '').trim(),
+    authorId: (existing.authorId || updated.authorId || fallbackAuthorId || 'usr-admin-1').trim(),
+  };
+}
+
+/**
+ * Reconciles a Firestore collection snapshot into application state without ever
+ * merging demo/seed records (`isDemoRecord: true`) or resurrecting deleted records.
+ */
+export function reconcileFirestoreSnapshot<T extends { id: string; isDemoRecord?: boolean }>(
+  input:
+    | T[]
+    | {
+        previousState: T[];
+        incomingDocs: T[];
+        isListenerReady: boolean;
+        hasListenerError: boolean;
+      }
+): T[] {
+  if (Array.isArray(input)) {
+    const byId = new Map<string, T>();
+    for (const docItem of input) {
+      if (!docItem || !docItem.id || docItem.isDemoRecord === true) continue;
+      byId.set(docItem.id, {
+        ...docItem,
+        isDemoRecord: false,
+      });
+    }
+    return Array.from(byId.values());
+  }
+
+  const { previousState, incomingDocs, isListenerReady, hasListenerError } = input;
+  if (!isListenerReady || hasListenerError) {
+    return (previousState || []).filter((item) => item && item.isDemoRecord !== true);
+  }
+
+  const byId = new Map<string, T>();
+  for (const docItem of incomingDocs || []) {
+    if (!docItem || !docItem.id || docItem.isDemoRecord === true) continue;
+    byId.set(docItem.id, {
+      ...docItem,
+      isDemoRecord: false,
+    });
+  }
+  return Array.from(byId.values());
+}
+
+/**
+ * Encodes workflowStatus, isAbsent, remarks, gpaPoint, passMarks, and sectionName
+ * into the 80-char grade field for backward-compatible persistence when the strict
+ * 16-key ExamResult rule is active, and decodes it transparently when reading from Firestore.
+ */
+export function encodeGradeWithWorkflowMeta(
+  recOrGrade:
+    | string
+    | Partial<{
+        grade: string;
+        workflowStatus?: ExamWorkflowStatus;
+        isAbsent?: boolean;
+        remarks?: string;
+        gpaPoint?: number;
+        passMarks?: number;
+        sectionName?: string;
+      }>,
+  workflowStatusArg?: ExamWorkflowStatus,
+  isAbsentArg?: boolean
+): string {
+  const isObj = typeof recOrGrade === 'object' && recOrGrade !== null;
+  const baseGrade = isObj ? recOrGrade.grade || 'N/A' : String(recOrGrade || 'N/A');
+  const wf = (isObj ? recOrGrade.workflowStatus : workflowStatusArg) || 'draft';
+  const isAbsent = Boolean(isObj ? recOrGrade.isAbsent : isAbsentArg);
+  const remarks = isObj && recOrGrade.remarks ? recOrGrade.remarks.trim().slice(0, 18) : '';
+  const gpaPoint = isObj && typeof recOrGrade.gpaPoint === 'number' ? recOrGrade.gpaPoint : undefined;
+  const passMarks = isObj && typeof recOrGrade.passMarks === 'number' ? recOrGrade.passMarks : undefined;
+  const sectionName = isObj && recOrGrade.sectionName ? recOrGrade.sectionName.trim().slice(0, 10) : '';
+
+  const cleanGrade = baseGrade.split(' ||')[0].trim().slice(0, 28);
+  const tokens: string[] = [];
+  if (wf && wf !== 'draft') tokens.push(`wf:${wf}`);
+  if (isAbsent) tokens.push('abs:1');
+  if (gpaPoint !== undefined) tokens.push(`g:${gpaPoint}`);
+  if (passMarks !== undefined) tokens.push(`p:${passMarks}`);
+  if (sectionName) tokens.push(`s:${sectionName.replace(/\|/g, '')}`);
+  if (remarks) tokens.push(`r:${remarks.replace(/\|/g, '')}`);
+
+  if (tokens.length === 0) {
+    return cleanGrade;
+  }
+  return `${cleanGrade} ||${tokens.join('|')}`.slice(0, 80);
+}
+
+export function decodeExamResultFromFirestore(
+  rawInput: Record<string, unknown> | ExamResult,
+  docId?: string
+): ExamResult {
+  const raw = rawInput as ExamResult & Record<string, unknown>;
+  const rawGrade = String(raw.grade || 'N/A');
+  const parts = rawGrade.split(' ||');
+  const cleanGrade = parts[0].trim() || 'N/A';
+
+  let parsedWf: ExamWorkflowStatus | undefined = raw.workflowStatus as
+    | ExamWorkflowStatus
+    | undefined;
+  let parsedAbsent: boolean | undefined =
+    typeof raw.isAbsent === 'boolean' ? raw.isAbsent : undefined;
+  let parsedGpa: number | undefined =
+    typeof raw.gpaPoint === 'number' ? raw.gpaPoint : undefined;
+  let parsedPassMarks: number | undefined =
+    typeof raw.passMarks === 'number' ? raw.passMarks : undefined;
+  let parsedSection: string | undefined =
+    typeof raw.sectionName === 'string' ? raw.sectionName : undefined;
+  let parsedRemarks: string | undefined =
+    typeof raw.remarks === 'string' ? raw.remarks : undefined;
+
+  if (parts.length > 1) {
+    const tokens = parts.slice(1).join('|').split('|');
+    for (const tok of tokens) {
+      if (tok.startsWith('wf:') && !parsedWf) {
+        parsedWf = tok.slice(3) as ExamWorkflowStatus;
+      } else if (tok === 'abs:1' && parsedAbsent === undefined) {
+        parsedAbsent = true;
+      } else if (tok.startsWith('g:') && parsedGpa === undefined) {
+        const n = Number(tok.slice(2));
+        if (!Number.isNaN(n)) parsedGpa = n;
+      } else if (tok.startsWith('p:') && parsedPassMarks === undefined) {
+        const n = Number(tok.slice(2));
+        if (!Number.isNaN(n)) parsedPassMarks = n;
+      } else if (tok.startsWith('s:') && !parsedSection) {
+        parsedSection = tok.slice(2);
+      } else if (tok.startsWith('r:') && !parsedRemarks) {
+        parsedRemarks = tok.slice(2);
+      }
+    }
+  }
+
+  const finalWf: ExamWorkflowStatus =
+    parsedWf || (raw.isPublished ? 'published' : 'draft');
+  const finalAbsent =
+    parsedAbsent !== undefined
+      ? parsedAbsent
+      : cleanGrade.toLowerCase().includes('absent') || cleanGrade === 'AB';
+
+  return {
+    ...raw,
+    id: docId || raw.id || '',
+    grade: cleanGrade,
+    isAbsent: finalAbsent,
+    workflowStatus: finalWf,
+    ...(parsedGpa !== undefined ? { gpaPoint: parsedGpa } : {}),
+    ...(parsedPassMarks !== undefined ? { passMarks: parsedPassMarks } : {}),
+    ...(parsedSection !== undefined ? { sectionName: parsedSection } : {}),
+    ...(parsedRemarks !== undefined ? { remarks: parsedRemarks } : {}),
+    isDemoRecord: false,
+  };
+}
+
+export function encodeExamSetupAsSettingsEnvelope(
+  setup: ExaminationSetup & {
+    subjects: Array<
+      Partial<ExamSubjectConfig> & {
+        fullMarks?: number;
+        isCompulsory?: boolean;
+      }
+    >;
+  },
+  authorId: string
+): {
+  institutionNameBn: string;
+  institutionNameEn: string;
+  institutionNameAr: string;
+  academicYear: string;
+  hijriYear: string;
+  addressBn: string;
+  phone: string;
+  email: string;
+  defaultLanguage: Language;
+  activeDepartments: string;
+  gradingSystem: string;
+  authorId: string;
+} {
+  const compactMeta = JSON.stringify({
+    s: (setup.subjects || []).map((sub) => [
+      sub.subjectCode || 'SUB-1',
+      sub.subjectName || 'বিষয়',
+      sub.maxMarks ?? sub.fullMarks ?? 100,
+      sub.passMarks ?? 33,
+      sub.isOptional !== undefined ? (sub.isOptional ? 1 : 0) : sub.isCompulsory === false ? 1 : 0,
+    ]),
+    p: [
+      setup.gradingPolicy?.enableGpa ? 1 : 0,
+      setup.gradingPolicy?.enableRank ? 1 : 0,
+      setup.gradingPolicy?.failIfAnySubjectFailed ? 1 : 0,
+    ],
+  }).slice(0, 795);
+
+  return {
+    institutionNameBn: (setup.examName || 'বার্ষিক পরীক্ষা').trim().slice(0, 290),
+    institutionNameEn: 'EXAM_SETUP_CONFIG',
+    institutionNameAr: (setup.instructions || '').trim().slice(0, 290),
+    academicYear: (setup.academicYear || '2026-2027').trim().slice(0, 95),
+    hijriYear: (setup.sectionName || 'ক-শাখা').trim().slice(0, 95),
+    addressBn: (setup.className || 'হিফয তাকমীল').trim().slice(0, 490),
+    phone: (setup.examDate || '2026-11-20').trim().slice(0, 95),
+    email: (setup.publicationDate || '2026-12-05').trim().slice(0, 195),
+    defaultLanguage: 'bn',
+    activeDepartments: (setup.department || 'hifz').trim().slice(0, 50),
+    gradingSystem: compactMeta,
+    authorId: (setup.authorId || authorId || 'usr-admin-1').trim(),
+  };
+}
+
+export function decodeExamSetupFromSettingsEnvelope(
+  arg1: string | Record<string, unknown>,
+  arg2: string | Record<string, unknown>
+): ExaminationSetup | null {
+  const docId = typeof arg1 === 'string' ? arg1 : String(arg2 || '');
+  const data = (typeof arg1 === 'object' && arg1 !== null ? arg1 : arg2) as Record<
+    string,
+    unknown
+  >;
+  if (!data || data.institutionNameEn !== 'EXAM_SETUP_CONFIG') {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(String(data.gradingSystem || '{}')) as {
+      s?: Array<[string, string, number, number, number]>;
+      p?: [number, number, number];
+    };
+    const subjects: ExamSubjectConfig[] = Array.isArray(parsed.s)
+      ? parsed.s.map((item, idx) => ({
+          subjectCode: String(item[0] || `SUB-${idx + 1}`),
+          subjectName: String(item[1] || `বিষয় ${idx + 1}`),
+          maxMarks: Number(item[2]) || 100,
+          passMarks: Number(item[3]) || 33,
+          isOptional: Boolean(item[4]),
+        }))
+      : [];
+    if (subjects.length === 0) return null;
+
+    const deptRaw = String(data.activeDepartments || 'hifz');
+    const department: Department = ['hifz', 'qawmi', 'general'].includes(deptRaw)
+      ? (deptRaw as Department)
+      : 'hifz';
+
+    return {
+      id: docId,
+      examName: String(data.institutionNameBn || ''),
+      academicYear: String(data.academicYear || '2026-2027'),
+      department,
+      className: String(data.addressBn || ''),
+      sectionName: String(data.hijriYear || ''),
+      examDate: String(data.phone || ''),
+      publicationDate: String(data.email || ''),
+      instructions: String(data.institutionNameAr || ''),
+      subjects,
+      gradingPolicy: {
+        ...DEFAULT_MADRASA_GRADING_POLICY,
+        enableGpa: parsed.p ? Boolean(parsed.p[0]) : true,
+        enableRank: parsed.p ? Boolean(parsed.p[1]) : true,
+        failIfAnySubjectFailed: parsed.p ? Boolean(parsed.p[2]) : true,
+      },
+      workflowStatus: 'draft',
+      authorId: String(data.authorId || 'usr-admin-1'),
+      createdAt: data.createdAt,
+      updatedAt: data.updatedAt,
+      isDemoRecord: false,
+    };
+  } catch {
+    return null;
+  }
+}
+
+
 
