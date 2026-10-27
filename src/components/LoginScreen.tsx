@@ -320,9 +320,6 @@ export function LoginScreen({
   onForgotPassword,
   onOpenOnlineAdmission,
   onActivateInvitation,
-  isSuperAdminProvisioned = false,
-  bootstrapOwnerEmail = '',
-  onBootstrapSuperAdmin,
   initialInvitationCode = '',
   isSigningIn,
   authError,
@@ -389,14 +386,6 @@ export function LoginScreen({
   } | null>(null);
   const [showPendingDetails, setShowPendingDetails] = useState<boolean>(false);
   const [showSuspendedContact, setShowSuspendedContact] = useState<boolean>(false);
-
-  // One-Time Super Admin Bootstrap Drawer State (Phase B)
-  const [showBootstrapDrawer, setShowBootstrapDrawer] = useState<boolean>(false);
-  const [bootEmail, setBootEmail] = useState<string>(bootstrapOwnerEmail || '');
-  const [bootName, setBootName] = useState<string>('প্রধান প্রশাসক (Super Admin)');
-  const [bootPhone, setBootPhone] = useState<string>('01711-984321');
-  const [bootPassword, setBootPassword] = useState<string>('');
-  const [bootFeedback, setBootFeedback] = useState<{ ok: boolean; message: string } | null>(null);
 
   // Sync external auth state / account status into card screen state
   useEffect(() => {
@@ -706,161 +695,7 @@ export function LoginScreen({
           })}
         </div>
 
-        {/* Right Header Status: One-Time Super Admin Bootstrap OR Locked Governance Badge */}
-        <div className="flex items-center gap-2">
-          {!isSuperAdminProvisioned && onBootstrapSuperAdmin ? (
-            <button
-              type="button"
-              onClick={() => {
-                setBootFeedback(null);
-                setShowBootstrapDrawer((prev) => !prev);
-              }}
-              data-testid="open-super-admin-bootstrap-btn"
-              className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-[#071E32]/90 hover:bg-[#0B2D48] backdrop-blur-md border border-[#E5B84B]/50 text-[11px] sm:text-xs font-semibold text-[#F3D37A] flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span>
-                {language === 'bn'
-                  ? 'এককালীন সুপার অ্যাডমিন সেটআপ'
-                  : language === 'ar'
-                    ? 'إعداد المشرف العام لأول مرة'
-                    : 'First-Time Super Admin Setup'}
-              </span>
-            </button>
-          ) : (
-            <div
-              data-testid="super-admin-locked-badge"
-              className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-[#071E32]/85 backdrop-blur-md border border-emerald-500/35 text-[11px] sm:text-xs font-semibold text-emerald-300 flex items-center gap-1.5"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-[#E5B84B] shrink-0" />
-              <span>
-                {language === 'bn'
-                  ? 'সিস্টেম গভর্ন্যান্স সক্রিয় (Super Admin Provisioned)'
-                  : 'Governance Locked · Super Admin Provisioned'}
-              </span>
-            </div>
-          )}
-        </div>
       </header>
-
-      {/* Expandable One-Time Super Admin Bootstrap Drawer (Hidden permanently once provisioned) */}
-      {!isSuperAdminProvisioned && showBootstrapDrawer && onBootstrapSuperAdmin && (
-        <div
-          data-testid="super-admin-bootstrap-drawer"
-          className="relative z-30 w-full max-w-7xl mx-auto px-4 sm:px-8 mt-2.5 animate-uqcm-view"
-        >
-          <div className="p-4 sm:p-5 rounded-2xl bg-[#061A2C]/95 backdrop-blur-xl border border-[#E5B84B]/45 shadow-2xl">
-            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <div>
-                <h2 className="text-xs sm:text-sm font-bold text-[#F3D37A] flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                  <span>
-                    {language === 'bn'
-                      ? 'এককালীন সুপার অ্যাডমিন প্রভিশনিং (One-Time Super Admin Bootstrap)'
-                      : 'One-Time Super Admin Provisioning (Atomic Lock)'}
-                  </span>
-                </h2>
-                <p className="text-[11px] text-slate-300 mt-0.5">
-                  {language === 'bn'
-                    ? 'শুধুমাত্র অনুমোদিত প্রতিষ্ঠান প্রধানের ইমেইল যাচাইয়ের মাধ্যমে প্রথমবার সুপার অ্যাডমিন সক্রিয় করা যাবে। একবার সম্পন্ন হলে এই প্যানেল চিরতরে লক হয়ে যাবে।'
-                    : 'Only the verified institutional owner email can complete first-time Super Admin provisioning. Once completed, this bootstrap lock is permanent.'}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowBootstrapDrawer(false)}
-                className="text-xs text-slate-400 hover:text-white px-2.5 py-1 rounded-lg border border-slate-700 cursor-pointer"
-              >
-                {language === 'bn' ? 'বন্ধ করুন' : 'Close'}
-              </button>
-            </div>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                setBootFeedback(null);
-                const res = await onBootstrapSuperAdmin({
-                  ownerEmail: bootEmail,
-                  displayName: bootName,
-                  phone: bootPhone,
-                  setupPassword: bootPassword,
-                });
-                setBootFeedback({
-                  ok: res.ok,
-                  message: language === 'bn' ? res.messageBn : res.messageEn,
-                });
-                if (res.ok) {
-                  setShowBootstrapDrawer(false);
-                }
-              }}
-              className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end"
-            >
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-200 mb-1">
-                  {language === 'bn' ? 'অনুমোদিত মালিকানা ইমেইল *' : 'Verified Owner Email *'}
-                </label>
-                <input
-                  type="email"
-                  value={bootEmail}
-                  onChange={(e) => setBootEmail(e.target.value)}
-                  placeholder="hmalameenemob@gmail.com"
-                  data-testid="bootstrap-input-email"
-                  className="w-full px-3 py-2 rounded-xl bg-[#041220] border border-slate-600/80 text-xs text-white focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-200 mb-1">
-                  {language === 'bn' ? 'প্রশাসকের নাম *' : 'Super Admin Name *'}
-                </label>
-                <input
-                  type="text"
-                  value={bootName}
-                  onChange={(e) => setBootName(e.target.value)}
-                  data-testid="bootstrap-input-name"
-                  className="w-full px-3 py-2 rounded-xl bg-[#041220] border border-slate-600/80 text-xs text-white focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-200 mb-1">
-                  {language === 'bn' ? 'দাপ্তরিক মোবাইল নম্বর *' : 'Official Phone *'}
-                </label>
-                <input
-                  type="text"
-                  value={bootPhone}
-                  onChange={(e) => setBootPhone(e.target.value)}
-                  data-testid="bootstrap-input-phone"
-                  className="w-full px-3 py-2 rounded-xl bg-[#041220] border border-slate-600/80 text-xs text-white focus:outline-none"
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="submit"
-                  data-testid="bootstrap-submit-btn"
-                  className="w-full py-2 px-4 rounded-xl bg-gradient-to-r from-[#059669] to-[#0D9488] hover:from-[#10B981] hover:to-[#059669] text-white font-bold text-xs shadow-md cursor-pointer"
-                >
-                  {language === 'bn'
-                    ? 'সুপার অ্যাডমিন সক্রিয় ও লক করুন'
-                    : 'Provision & Lock Super Admin'}
-                </button>
-              </div>
-            </form>
-
-            {bootFeedback && (
-              <div
-                role="alert"
-                data-testid="bootstrap-feedback-box"
-                className={`mt-3 p-2.5 rounded-xl border text-xs font-medium ${
-                  bootFeedback.ok
-                    ? 'bg-emerald-950/80 border-emerald-400/60 text-emerald-100'
-                    : 'bg-rose-950/80 border-rose-400/60 text-rose-200'
-                }`}
-              >
-                {bootFeedback.message}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* =====================================================================
           3. MAIN SPLIT WORKSPACE (BRANDED ARCH SCENE LEFT + GLASS CARD RIGHT)
