@@ -29,12 +29,16 @@ service cloud.firestore {
       return isSignedIn() && request.auth.token.email == 'hmalameenemob@gmail.com';
     }
 
+    function userProfileData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
     function hasRole(allowedRoles) {
       return isSignedIn() && (
         isBootstrapSuperAdmin() || (
           exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active' &&
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in allowedRoles
+          userProfileData().status == 'active' &&
+          userProfileData().role in allowedRoles
         )
       );
     }
@@ -46,21 +50,20 @@ service cloud.firestore {
     function isLinkedGuardianOf(studentId) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active' &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'guardian' &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.linkedStudentIds.split(',').hasAny([studentId]);
+        userProfileData().status == 'active' &&
+        userProfileData().role == 'guardian' &&
+        userProfileData().linkedStudentIds.split(',').hasAny([studentId]);
     }
 
     function isLinkedStudentOf(studentId) {
       return isSignedIn() &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active' &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'student' &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.linkedStudentIds == studentId;
+        userProfileData().status == 'active' &&
+        userProfileData().role == 'student' &&
+        userProfileData().linkedStudentIds == studentId;
     }
 
-    // 3. Entity Validation Blueprints (Anti-Update-Gap)
-
+    // 3. Entity Validation Blueprints
     function isValidUserProfile(data) {
       return data.keys().hasAll([
         'uid', 'email', 'displayName', 'role', 'status',
@@ -70,11 +73,11 @@ service cloud.firestore {
         'uid', 'email', 'displayName', 'role', 'status',
         'linkedStudentIds', 'assignedClasses', 'phone', 'createdAt', 'updatedAt'
       ]) &&
-      data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
       data.email is string && data.email.size() >= 3 && data.email.size() <= 250 &&
       data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 250 &&
-      data.role is string && data.role.size() <= 60 && data.role in ['super_admin', 'muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'guardian', 'student', 'staff'] &&
-      data.status is string && data.status.size() <= 40 && data.status in ['active', 'pending', 'suspended'] &&
+      data.role in ['super_admin', 'muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'guardian', 'student', 'staff'] &&
+      data.status in ['active', 'pending', 'suspended'] &&
       data.linkedStudentIds is string && data.linkedStudentIds.size() <= 800 &&
       data.assignedClasses is string && data.assignedClasses.size() <= 600 &&
       data.phone is string && data.phone.size() <= 80 &&
@@ -92,31 +95,24 @@ service cloud.firestore {
       data.keys().hasOnly([
         'admissionNo', 'nameBn', 'nameEn', 'nameAr', 'department', 'className', 'rollNo',
         'dateOfBirth', 'bloodGroup', 'admissionDate', 'guardianName', 'guardianPhone',
-        'guardianRelation', 'guardianUid', 'studentUid', 'photoUrl', 'applicationId', 'residentialStatus', 'dormitoryRoom',
-        'monthlyFeeBdt', 'status', 'authorId', 'createdAt', 'updatedAt'
+        'guardianRelation', 'guardianUid', 'studentUid', 'photoUrl', 'applicationId',
+        'residentialStatus', 'dormitoryRoom', 'monthlyFeeBdt', 'status',
+        'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 && data.admissionNo.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 &&
       data.nameBn is string && data.nameBn.size() >= 1 && data.nameBn.size() <= 300 &&
       data.nameEn is string && data.nameEn.size() >= 1 && data.nameEn.size() <= 300 &&
       data.nameAr is string && data.nameAr.size() <= 300 &&
-      data.department is string && data.department.size() <= 50 && data.department in ['hifz', 'qawmi', 'general'] &&
+      data.department in ['hifz', 'qawmi', 'general'] &&
       data.className is string && data.className.size() >= 1 && data.className.size() <= 250 &&
       data.rollNo is number && data.rollNo >= 1 && data.rollNo <= 999999 &&
-      data.dateOfBirth is string && data.dateOfBirth.size() <= 60 &&
-      data.bloodGroup is string && data.bloodGroup.size() <= 30 &&
-      data.admissionDate is string && data.admissionDate.size() >= 4 && data.admissionDate.size() <= 60 &&
       data.guardianName is string && data.guardianName.size() >= 1 && data.guardianName.size() <= 300 &&
       data.guardianPhone is string && data.guardianPhone.size() >= 5 && data.guardianPhone.size() <= 80 &&
-      data.guardianRelation is string && data.guardianRelation.size() <= 150 &&
       data.guardianUid is string && data.guardianUid.size() <= 128 &&
-      (!('studentUid' in data) || (data.studentUid is string && data.studentUid.size() <= 128)) &&
-      (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 75000)) &&
-      (!('applicationId' in data) || (data.applicationId is string && data.applicationId.size() <= 128)) &&
-      data.residentialStatus is string && data.residentialStatus.size() <= 40 && data.residentialStatus in ['residential', 'day_scholar'] &&
-      data.dormitoryRoom is string && data.dormitoryRoom.size() <= 250 &&
+      data.residentialStatus in ['residential', 'day_scholar'] &&
       data.monthlyFeeBdt is number && data.monthlyFeeBdt >= 0 && data.monthlyFeeBdt <= 5000000 &&
-      data.status is string && data.status.size() <= 40 && data.status in ['active', 'on_leave', 'graduated', 'transferred'] &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.status in ['active', 'on_leave', 'graduated', 'transferred'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -132,21 +128,15 @@ service cloud.firestore {
         'assignedClasses', 'phone', 'qualification', 'joiningDate', 'basicSalaryBdt',
         'houseAllowanceBdt', 'medicalAllowanceBdt', 'status', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.employeeCode is string && data.employeeCode.size() >= 1 && data.employeeCode.size() <= 100 && data.employeeCode.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.employeeCode is string && data.employeeCode.size() >= 1 && data.employeeCode.size() <= 100 &&
       data.nameBn is string && data.nameBn.size() >= 1 && data.nameBn.size() <= 300 &&
-      data.nameEn is string && data.nameEn.size() >= 1 && data.nameEn.size() <= 300 &&
-      data.designation is string && data.designation.size() >= 1 && data.designation.size() <= 300 &&
-      data.role is string && data.role.size() <= 60 && data.role in ['muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'staff'] &&
-      data.department is string && data.department.size() <= 60 && data.department in ['hifz', 'qawmi', 'general', 'administration', 'boarding'] &&
-      data.assignedClasses is string && data.assignedClasses.size() <= 500 &&
-      data.phone is string && data.phone.size() >= 5 && data.phone.size() <= 80 &&
-      data.qualification is string && data.qualification.size() <= 400 &&
-      data.joiningDate is string && data.joiningDate.size() <= 60 &&
-      data.basicSalaryBdt is number && data.basicSalaryBdt >= 0 && data.basicSalaryBdt <= 5000000 &&
-      data.houseAllowanceBdt is number && data.houseAllowanceBdt >= 0 && data.houseAllowanceBdt <= 2000000 &&
-      data.medicalAllowanceBdt is number && data.medicalAllowanceBdt >= 0 && data.medicalAllowanceBdt <= 2000000 &&
-      data.status is string && data.status.size() <= 40 && data.status in ['active', 'on_leave', 'resigned'] &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.role in ['muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'staff'] &&
+      data.department in ['hifz', 'qawmi', 'general', 'administration', 'boarding'] &&
+      data.basicSalaryBdt is number && data.basicSalaryBdt >= 0 &&
+      data.houseAllowanceBdt is number && data.houseAllowanceBdt >= 0 &&
+      data.medicalAllowanceBdt is number && data.medicalAllowanceBdt >= 0 &&
+      data.status in ['active', 'on_leave', 'resigned'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -161,15 +151,10 @@ service cloud.firestore {
         'department', 'status', 'guardianUid', 'remarks', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.date is string && data.date.size() >= 4 && data.date.size() <= 40 &&
-      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 && data.studentId.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 300 &&
-      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 &&
-      data.className is string && data.className.size() >= 1 && data.className.size() <= 250 &&
-      data.department is string && data.department.size() <= 50 && data.department in ['hifz', 'qawmi', 'general'] &&
-      data.status is string && data.status.size() <= 30 && data.status in ['present', 'absent', 'late', 'leave'] &&
-      data.guardianUid is string && data.guardianUid.size() <= 128 &&
-      data.remarks is string && data.remarks.size() <= 600 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
+      data.department in ['hifz', 'qawmi', 'general'] &&
+      data.status in ['present', 'absent', 'late', 'leave'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -187,18 +172,13 @@ service cloud.firestore {
       ]) &&
       data.examName is string && data.examName.size() >= 1 && data.examName.size() <= 300 &&
       data.academicYear is string && data.academicYear.size() >= 2 && data.academicYear.size() <= 60 &&
-      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 && data.studentId.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 300 &&
-      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 &&
-      data.className is string && data.className.size() >= 1 && data.className.size() <= 250 &&
-      data.department is string && data.department.size() <= 50 && data.department in ['hifz', 'qawmi', 'general'] &&
-      data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 300 &&
+      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
+      data.department in ['hifz', 'qawmi', 'general'] &&
       data.marksObtained is number && data.marksObtained >= 0 && data.marksObtained <= 1000 &&
       data.fullMarks is number && data.fullMarks >= 1 && data.fullMarks <= 1000 &&
       data.grade is string && data.grade.size() >= 1 && data.grade.size() <= 80 &&
       data.isPublished is bool &&
-      data.guardianUid is string && data.guardianUid.size() <= 128 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -214,20 +194,14 @@ service cloud.firestore {
         'feeType', 'billingMonth', 'amountDueBdt', 'amountPaidBdt', 'paymentMethod',
         'transactionRef', 'status', 'guardianUid', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.receiptNo is string && data.receiptNo.size() >= 1 && data.receiptNo.size() <= 100 && data.receiptNo.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 && data.studentId.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 300 &&
-      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 &&
-      data.className is string && data.className.size() >= 1 && data.className.size() <= 250 &&
-      data.feeType is string && data.feeType.size() <= 60 && data.feeType in ['monthly_tuition', 'boarding_mess', 'admission_fee', 'exam_fee', 'generator_utility'] &&
-      data.billingMonth is string && data.billingMonth.size() >= 2 && data.billingMonth.size() <= 120 &&
-      data.amountDueBdt is number && data.amountDueBdt >= 0 && data.amountDueBdt <= 10000000 &&
-      data.amountPaidBdt is number && data.amountPaidBdt >= 0 && data.amountPaidBdt <= 10000000 &&
-      data.paymentMethod is string && data.paymentMethod.size() <= 40 && data.paymentMethod in ['cash', 'bkash', 'nagad', 'bank_transfer', 'unpaid'] &&
-      data.transactionRef is string && data.transactionRef.size() <= 150 &&
-      data.status is string && data.status.size() <= 30 && data.status in ['paid', 'partial', 'unpaid'] &&
-      data.guardianUid is string && data.guardianUid.size() <= 128 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.receiptNo is string && data.receiptNo.size() >= 1 && data.receiptNo.size() <= 100 &&
+      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
+      data.feeType in ['monthly_tuition', 'boarding_mess', 'admission_fee', 'exam_fee', 'generator_utility'] &&
+      data.amountDueBdt is number && data.amountDueBdt >= 0 &&
+      data.amountPaidBdt is number && data.amountPaidBdt >= 0 &&
+      data.paymentMethod in ['cash', 'bkash', 'nagad', 'bank_transfer', 'unpaid'] &&
+      data.status in ['paid', 'partial', 'unpaid'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -241,14 +215,10 @@ service cloud.firestore {
         'voucherNo', 'title', 'category', 'amountBdt', 'expenseDate',
         'approvedBy', 'notes', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.voucherNo is string && data.voucherNo.size() >= 1 && data.voucherNo.size() <= 100 && data.voucherNo.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.title is string && data.title.size() >= 1 && data.title.size() <= 300 &&
-      data.category is string && data.category.size() <= 60 && data.category in ['boarding_food', 'utilities', 'maintenance', 'stationery', 'events'] &&
-      data.amountBdt is number && data.amountBdt >= 1 && data.amountBdt <= 50000000 &&
-      data.expenseDate is string && data.expenseDate.size() >= 4 && data.expenseDate.size() <= 60 &&
-      data.approvedBy is string && data.approvedBy.size() <= 250 &&
-      data.notes is string && data.notes.size() <= 800 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.voucherNo is string && data.voucherNo.size() >= 1 && data.voucherNo.size() <= 100 &&
+      data.category in ['boarding_food', 'utilities', 'maintenance', 'stationery', 'events'] &&
+      data.amountBdt is number && data.amountBdt >= 1 &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -264,19 +234,11 @@ service cloud.firestore {
         'sabaqSurahAndAyat', 'sabaqLines', 'sabqiPara', 'manzilPara',
         'tajweedRating', 'teacherComment', 'guardianUid', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.date is string && data.date.size() >= 4 && data.date.size() <= 40 &&
-      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 && data.studentId.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 300 &&
-      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 &&
+      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
       data.paraNumber is number && data.paraNumber >= 1 && data.paraNumber <= 30 &&
-      data.sabaqSurahAndAyat is string && data.sabaqSurahAndAyat.size() >= 1 && data.sabaqSurahAndAyat.size() <= 300 &&
       data.sabaqLines is number && data.sabaqLines >= 0 && data.sabaqLines <= 500 &&
-      data.sabqiPara is string && data.sabqiPara.size() <= 250 &&
-      data.manzilPara is string && data.manzilPara.size() <= 250 &&
-      data.tajweedRating is string && data.tajweedRating.size() <= 60 && data.tajweedRating in ['mumtaz', 'jayyid_jiddan', 'jayyid', 'needs_revision'] &&
-      data.teacherComment is string && data.teacherComment.size() <= 800 &&
-      data.guardianUid is string && data.guardianUid.size() <= 128 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.tajweedRating in ['mumtaz', 'jayyid_jiddan', 'jayyid', 'needs_revision'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -292,18 +254,9 @@ service cloud.firestore {
         'departureDate', 'expectedReturnDate', 'actualReturnDate', 'accompaniedBy',
         'status', 'guardianUid', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 && data.studentId.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 300 &&
-      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 &&
-      data.dormitoryRoom is string && data.dormitoryRoom.size() <= 250 &&
-      data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 600 &&
-      data.departureDate is string && data.departureDate.size() >= 4 && data.departureDate.size() <= 60 &&
-      data.expectedReturnDate is string && data.expectedReturnDate.size() >= 4 && data.expectedReturnDate.size() <= 60 &&
-      data.actualReturnDate is string && data.actualReturnDate.size() <= 60 &&
-      data.accompaniedBy is string && data.accompaniedBy.size() <= 250 &&
-      data.status is string && data.status.size() <= 40 && data.status in ['pending', 'approved', 'returned', 'rejected'] &&
-      data.guardianUid is string && data.guardianUid.size() <= 128 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
+      data.status in ['pending', 'approved', 'returned', 'rejected'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -319,18 +272,10 @@ service cloud.firestore {
         'basicSalaryBdt', 'allowancesBdt', 'deductionsBdt', 'netPayableBdt',
         'status', 'paymentDate', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.staffId is string && data.staffId.size() >= 1 && data.staffId.size() <= 128 && data.staffId.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.staffNameBn is string && data.staffNameBn.size() >= 1 && data.staffNameBn.size() <= 300 &&
-      data.employeeCode is string && data.employeeCode.size() >= 1 && data.employeeCode.size() <= 100 &&
-      data.designation is string && data.designation.size() >= 1 && data.designation.size() <= 300 &&
-      data.salaryMonth is string && data.salaryMonth.size() >= 2 && data.salaryMonth.size() <= 120 &&
-      data.basicSalaryBdt is number && data.basicSalaryBdt >= 0 && data.basicSalaryBdt <= 5000000 &&
-      data.allowancesBdt is number && data.allowancesBdt >= 0 && data.allowancesBdt <= 5000000 &&
-      data.deductionsBdt is number && data.deductionsBdt >= 0 && data.deductionsBdt <= 5000000 &&
-      data.netPayableBdt is number && data.netPayableBdt >= 0 && data.netPayableBdt <= 10000000 &&
-      data.status is string && data.status.size() <= 40 && data.status in ['paid', 'pending'] &&
-      data.paymentDate is string && data.paymentDate.size() <= 60 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.staffId is string && data.staffId.size() >= 1 && data.staffId.size() <= 128 &&
+      data.netPayableBdt is number && data.netPayableBdt >= 0 &&
+      data.status in ['paid', 'pending'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -345,13 +290,9 @@ service cloud.firestore {
         'priority', 'publishDate', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.titleBn is string && data.titleBn.size() >= 1 && data.titleBn.size() <= 400 &&
-      data.titleEn is string && data.titleEn.size() <= 400 &&
-      data.contentBn is string && data.contentBn.size() >= 1 && data.contentBn.size() <= 3000 &&
-      data.targetAudience is string && data.targetAudience.size() <= 40 && data.targetAudience in ['all', 'guardians', 'teachers', 'residential', 'students'] &&
-      data.targetClass is string && data.targetClass.size() <= 250 &&
-      data.priority is string && data.priority.size() <= 40 && data.priority in ['normal', 'important', 'urgent'] &&
-      data.publishDate is string && data.publishDate.size() >= 4 && data.publishDate.size() <= 60 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.targetAudience in ['all', 'guardians', 'teachers', 'residential', 'students'] &&
+      data.priority in ['normal', 'important', 'urgent'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -371,16 +312,10 @@ service cloud.firestore {
       ]) &&
       data.institutionNameBn is string && data.institutionNameBn.size() >= 1 && data.institutionNameBn.size() <= 300 &&
       data.institutionNameEn is string && data.institutionNameEn.size() >= 1 && data.institutionNameEn.size() <= 300 &&
-      data.institutionNameAr is string && data.institutionNameAr.size() <= 300 &&
       data.academicYear is string && data.academicYear.size() >= 2 && data.academicYear.size() <= 100 &&
-      data.hijriYear is string && data.hijriYear.size() <= 100 &&
-      data.addressBn is string && data.addressBn.size() <= 500 &&
-      data.phone is string && data.phone.size() <= 100 &&
-      data.email is string && data.email.size() <= 200 &&
-      data.defaultLanguage is string && data.defaultLanguage.size() <= 20 && data.defaultLanguage in ['bn', 'en', 'ar'] &&
-      data.activeDepartments is string && data.activeDepartments.size() <= 400 &&
+      data.defaultLanguage in ['bn', 'en', 'ar'] &&
       data.gradingSystem is string && data.gradingSystem.size() <= 800 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -400,27 +335,11 @@ service cloud.firestore {
         'metaDate', 'ctaModule', 'ctaLabelBn', 'ctaLabelEn', 'ctaLabelAr',
         'theme', 'isActive', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.category is string && data.category.size() <= 40 && data.category in ['academic', 'exam', 'admission', 'event'] &&
-      data.badgeBn is string && data.badgeBn.size() <= 300 &&
-      data.badgeEn is string && data.badgeEn.size() <= 300 &&
-      data.badgeAr is string && data.badgeAr.size() <= 300 &&
+      data.category in ['academic', 'exam', 'admission', 'event'] &&
       data.titleBn is string && data.titleBn.size() >= 1 && data.titleBn.size() <= 400 &&
-      data.titleEn is string && data.titleEn.size() <= 400 &&
-      data.titleAr is string && data.titleAr.size() <= 400 &&
-      data.descriptionBn is string && data.descriptionBn.size() >= 1 && data.descriptionBn.size() <= 1200 &&
-      data.descriptionEn is string && data.descriptionEn.size() <= 1200 &&
-      data.descriptionAr is string && data.descriptionAr.size() <= 1200 &&
-      data.metaDate is string && data.metaDate.size() <= 200 &&
-      data.ctaModule is string && data.ctaModule.size() >= 2 && data.ctaModule.size() <= 40 && (
-        data.ctaModule in ['dashboard', 'admissions', 'students', 'staff', 'attendance', 'exams', 'fees', 'hifz'] ||
-        data.ctaModule in ['residential', 'payroll', 'student_portal', 'guardian', 'notices', 'reports', 'settings']
-      ) &&
-      data.ctaLabelBn is string && data.ctaLabelBn.size() <= 200 &&
-      data.ctaLabelEn is string && data.ctaLabelEn.size() <= 200 &&
-      data.ctaLabelAr is string && data.ctaLabelAr.size() <= 200 &&
-      data.theme is string && data.theme.size() <= 30 && data.theme in ['emerald', 'navy', 'ivory'] &&
+      data.theme in ['emerald', 'navy', 'ivory'] &&
       data.isActive is bool &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -436,24 +355,13 @@ service cloud.firestore {
         'date', 'studentId', 'studentNameBn', 'admissionNo', 'className',
         'department', 'subjectName', 'lessonCovered', 'homeworkAssigned',
         'dueDate', 'completionStatus', 'teacherFeedback', 'learningGoal',
-        'visibleToGuardian', 'guardianUid', 'authorId', 'createdAt', 'updatedAt'
+        'visibleToGuardian', 'guardianUid', 'studentUid', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.date is string && data.date.size() >= 4 && data.date.size() <= 40 &&
-      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 && data.studentId.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 300 &&
-      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 &&
-      data.className is string && data.className.size() >= 1 && data.className.size() <= 250 &&
-      data.department is string && data.department.size() <= 50 && data.department in ['hifz', 'qawmi', 'general'] &&
-      data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 300 &&
-      data.lessonCovered is string && data.lessonCovered.size() >= 1 && data.lessonCovered.size() <= 800 &&
-      data.homeworkAssigned is string && data.homeworkAssigned.size() >= 1 && data.homeworkAssigned.size() <= 800 &&
-      data.dueDate is string && data.dueDate.size() >= 4 && data.dueDate.size() <= 40 &&
-      data.completionStatus is string && data.completionStatus.size() <= 40 && data.completionStatus in ['pending', 'completed', 'needs_revision'] &&
-      data.teacherFeedback is string && data.teacherFeedback.size() <= 800 &&
-      data.learningGoal is string && data.learningGoal.size() <= 800 &&
+      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
+      data.department in ['hifz', 'qawmi', 'general'] &&
+      data.completionStatus in ['pending', 'completed', 'needs_revision'] &&
       data.visibleToGuardian is bool &&
-      data.guardianUid is string && data.guardianUid.size() <= 128 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -469,84 +377,27 @@ service cloud.firestore {
         'guardianName', 'subject', 'message', 'teacherReply',
         'status', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 && data.studentId.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 300 &&
-      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 &&
-      data.guardianUid is string && data.guardianUid.size() <= 128 &&
-      data.guardianName is string && data.guardianName.size() >= 1 && data.guardianName.size() <= 300 &&
-      data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 300 &&
-      data.message is string && data.message.size() >= 1 && data.message.size() <= 1500 &&
-      data.teacherReply is string && data.teacherReply.size() <= 1500 &&
-      data.status is string && data.status.size() <= 40 && data.status in ['open', 'replied', 'resolved'] &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 &&
+      data.status in ['open', 'replied', 'resolved'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
 
     function isValidAdmissionApplication(data) {
       return data.keys().hasAll([
-        'referenceNo', 'nameBn', 'nameEn', 'nameAr', 'dateOfBirth', 'gender',
-        'bloodGroup', 'birthRegNo', 'photoUrl', 'presentAddress', 'permanentAddress',
-        'fatherName', 'fatherPhone', 'motherName', 'motherPhone', 'guardianName',
-        'guardianRelation', 'guardianPhone', 'guardianEmail', 'requestGuardianAccount'
+        'referenceNo', 'nameBn', 'nameEn', 'department', 'requestedClass',
+        'guardianName', 'guardianPhone', 'residentialStatus', 'status',
+        'assignedStudentId', 'assignedAdmissionNo', 'reviewedByUid',
+        'applicantUid', 'guardianUid', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.keys().hasAll([
-        'department', 'requestedClass', 'academicSession', 'previousInstitution',
-        'previousClass', 'residentialStatus', 'medicalOrSpecialNotes',
-        'documentName', 'documentSummaryUrl', 'consentAccepted', 'status',
-        'adminRemarks', 'assignedStudentId', 'assignedAdmissionNo', 'assignedRollNo',
-        'assignedDormitoryRoom', 'assignedMonthlyFeeBdt', 'submittedDate',
-        'reviewedDate', 'reviewedByUid', 'applicantUid', 'guardianUid',
-        'authorId', 'createdAt', 'updatedAt'
-      ]) &&
-      data.keys().size() >= 45 &&
-      data.keys().size() <= 48 &&
-      (!('entrySource' in data) || (data.entrySource is string && data.entrySource.size() <= 40 && data.entrySource in ['online_public', 'muhtamim_direct'])) &&
-      (!('studentInvitationCode' in data) || (data.studentInvitationCode is string && data.studentInvitationCode.size() <= 100)) &&
-      (!('guardianInvitationCode' in data) || (data.guardianInvitationCode is string && data.guardianInvitationCode.size() <= 100)) &&
-      data.referenceNo is string && data.referenceNo.size() >= 4 && data.referenceNo.size() <= 100 && data.referenceNo.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.keys().size() >= 17 && data.keys().size() <= 50 &&
+      data.referenceNo is string && data.referenceNo.size() >= 4 && data.referenceNo.size() <= 100 &&
       data.nameBn is string && data.nameBn.size() >= 1 && data.nameBn.size() <= 300 &&
-      data.nameEn is string && data.nameEn.size() >= 1 && data.nameEn.size() <= 300 &&
-      data.nameAr is string && data.nameAr.size() <= 300 &&
-      data.dateOfBirth is string && data.dateOfBirth.size() >= 4 && data.dateOfBirth.size() <= 60 &&
-      data.gender is string && data.gender.size() <= 20 && data.gender in ['male', 'female'] &&
-      data.bloodGroup is string && data.bloodGroup.size() <= 30 &&
-      data.birthRegNo is string && data.birthRegNo.size() <= 80 &&
-      data.photoUrl is string && data.photoUrl.size() <= 75000 &&
-      data.presentAddress is string && data.presentAddress.size() >= 2 && data.presentAddress.size() <= 600 &&
-      data.permanentAddress is string && data.permanentAddress.size() <= 600 &&
-      data.fatherName is string && data.fatherName.size() >= 1 && data.fatherName.size() <= 300 &&
-      data.fatherPhone is string && data.fatherPhone.size() <= 80 &&
-      data.motherName is string && data.motherName.size() <= 300 &&
-      data.motherPhone is string && data.motherPhone.size() <= 80 &&
-      data.guardianName is string && data.guardianName.size() >= 1 && data.guardianName.size() <= 300 &&
-      data.guardianRelation is string && data.guardianRelation.size() >= 1 && data.guardianRelation.size() <= 150 &&
-      data.guardianPhone is string && data.guardianPhone.size() >= 5 && data.guardianPhone.size() <= 80 &&
-      data.guardianEmail is string && data.guardianEmail.size() <= 250 &&
-      data.requestGuardianAccount is bool &&
-      data.department is string && data.department.size() <= 50 && data.department in ['hifz', 'qawmi', 'general'] &&
-      data.requestedClass is string && data.requestedClass.size() >= 1 && data.requestedClass.size() <= 250 &&
-      data.academicSession is string && data.academicSession.size() >= 2 && data.academicSession.size() <= 100 &&
-      data.previousInstitution is string && data.previousInstitution.size() <= 300 &&
-      data.previousClass is string && data.previousClass.size() <= 200 &&
-      data.residentialStatus is string && data.residentialStatus.size() <= 40 && data.residentialStatus in ['residential', 'day_scholar'] &&
-      data.medicalOrSpecialNotes is string && data.medicalOrSpecialNotes.size() <= 800 &&
-      data.documentName is string && data.documentName.size() <= 250 &&
-      data.documentSummaryUrl is string && data.documentSummaryUrl.size() <= 75000 &&
-      data.consentAccepted is bool &&
-      data.status is string && data.status.size() <= 40 && data.status in ['pending', 'under_review', 'needs_correction', 'approved', 'rejected'] &&
-      data.adminRemarks is string && data.adminRemarks.size() <= 1000 &&
-      data.assignedStudentId is string && data.assignedStudentId.size() <= 128 &&
-      data.assignedAdmissionNo is string && data.assignedAdmissionNo.size() <= 100 &&
-      data.assignedRollNo is number && data.assignedRollNo >= 0 && data.assignedRollNo <= 999999 &&
-      data.assignedDormitoryRoom is string && data.assignedDormitoryRoom.size() <= 250 &&
-      data.assignedMonthlyFeeBdt is number && data.assignedMonthlyFeeBdt >= 0 && data.assignedMonthlyFeeBdt <= 5000000 &&
-      data.submittedDate is string && data.submittedDate.size() >= 4 && data.submittedDate.size() <= 60 &&
-      data.reviewedDate is string && data.reviewedDate.size() <= 60 &&
-      data.reviewedByUid is string && data.reviewedByUid.size() <= 128 &&
-      data.applicantUid is string && data.applicantUid.size() <= 128 &&
-      data.guardianUid is string && data.guardianUid.size() <= 128 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.department in ['hifz', 'qawmi', 'general'] &&
+      data.residentialStatus in ['residential', 'day_scholar'] &&
+      data.status in ['pending', 'under_review', 'needs_correction', 'approved', 'rejected'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -565,19 +416,9 @@ service cloud.firestore {
         'reviewedDate', 'reviewedByUid', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
       data.guardianUid is string && data.guardianUid.size() >= 1 && data.guardianUid.size() <= 128 &&
-      data.guardianName is string && data.guardianName.size() >= 1 && data.guardianName.size() <= 300 &&
-      data.guardianPhone is string && data.guardianPhone.size() >= 5 && data.guardianPhone.size() <= 80 &&
-      data.guardianEmail is string && data.guardianEmail.size() <= 250 &&
       data.requestedAdmissionNo is string && data.requestedAdmissionNo.size() >= 1 && data.requestedAdmissionNo.size() <= 100 &&
-      data.requestedStudentNameBn is string && data.requestedStudentNameBn.size() >= 1 && data.requestedStudentNameBn.size() <= 300 &&
-      data.relationship is string && data.relationship.size() >= 1 && data.relationship.size() <= 150 &&
-      data.matchedStudentId is string && data.matchedStudentId.size() <= 128 &&
-      data.status is string && data.status.size() <= 40 && data.status in ['pending', 'approved', 'rejected'] &&
-      data.adminNotes is string && data.adminNotes.size() <= 800 &&
-      data.requestedDate is string && data.requestedDate.size() >= 4 && data.requestedDate.size() <= 60 &&
-      data.reviewedDate is string && data.reviewedDate.size() <= 60 &&
-      data.reviewedByUid is string && data.reviewedByUid.size() <= 128 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.status in ['pending', 'approved', 'rejected'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -590,34 +431,11 @@ service cloud.firestore {
         'requiresPasswordChangeOnFirstLogin', 'issuedByUid', 'issuedAt',
         'redeemedByUid', 'redeemedAt', 'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.keys().size() >= 20 &&
-      data.keys().size() <= 28 &&
-      (!('issuedByRole' in data) || (data.issuedByRole is string && data.issuedByRole.size() <= 30 && data.issuedByRole in ['super_admin', 'muhtamim'])) &&
-      (!('expiresAt' in data) || (data.expiresAt is string && data.expiresAt.size() <= 60)) &&
-      (!('staffId' in data) || (data.staffId is string && data.staffId.size() <= 128)) &&
-      (!('employeeCode' in data) || (data.employeeCode is string && data.employeeCode.size() <= 80)) &&
-      (!('designation' in data) || (data.designation is string && data.designation.size() <= 200)) &&
-      (!('assignedDepartment' in data) || (data.assignedDepartment is string && data.assignedDepartment.size() <= 40 && data.assignedDepartment in ['hifz', 'qawmi', 'general', 'administration', 'boarding'])) &&
-      (!('assignedClasses' in data) || (data.assignedClasses is string && data.assignedClasses.size() <= 300)) &&
-      (!('assignedSubjects' in data) || (data.assignedSubjects is string && data.assignedSubjects.size() <= 300)) &&
-      data.invitationCode is string && data.invitationCode.size() >= 6 && data.invitationCode.size() <= 100 && data.invitationCode.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.targetRole is string && data.targetRole.size() <= 40 && data.targetRole in ['muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'staff', 'student', 'guardian'] &&
-      data.applicationId is string && data.applicationId.size() >= 1 && data.applicationId.size() <= 128 &&
-      data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128 && data.studentId.matches('^[a-zA-Z0-9_\\-]+$') &&
-      data.admissionNo is string && data.admissionNo.size() >= 1 && data.admissionNo.size() <= 100 &&
-      data.studentNameBn is string && data.studentNameBn.size() >= 1 && data.studentNameBn.size() <= 300 &&
-      data.recipientName is string && data.recipientName.size() >= 1 && data.recipientName.size() <= 300 &&
-      data.recipientPhone is string && data.recipientPhone.size() >= 5 && data.recipientPhone.size() <= 80 &&
-      data.recipientEmail is string && data.recipientEmail.size() <= 250 &&
-      data.activationUrl is string && data.activationUrl.size() >= 5 && data.activationUrl.size() <= 500 &&
-      data.status is string && data.status.size() <= 40 && data.status in ['pending_activation', 'activated', 'revoked', 'expired'] &&
-      data.provisioningMode is string && data.provisioningMode.size() <= 50 && data.provisioningMode in ['single_use_activation_link'] &&
-      data.requiresPasswordChangeOnFirstLogin is bool &&
-      data.issuedByUid is string && data.issuedByUid.size() >= 1 && data.issuedByUid.size() <= 128 &&
-      data.issuedAt is string && data.issuedAt.size() >= 4 && data.issuedAt.size() <= 60 &&
-      data.redeemedByUid is string && data.redeemedByUid.size() <= 128 &&
-      data.redeemedAt is string && data.redeemedAt.size() <= 60 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.keys().size() >= 20 && data.keys().size() <= 30 &&
+      data.invitationCode is string && data.invitationCode.size() >= 6 && data.invitationCode.size() <= 100 &&
+      data.targetRole in ['muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'staff', 'student', 'guardian'] &&
+      data.status in ['pending_activation', 'activated', 'revoked', 'expired'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -633,14 +451,9 @@ service cloud.firestore {
         'superAdminName', 'provisionedAt', 'bootstrapMethod',
         'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.lockId is string && data.lockId.size() <= 40 && data.lockId in ['super_admin_lock'] &&
+      data.lockId == 'super_admin_lock' &&
       data.isProvisioned is bool &&
-      data.superAdminUid is string && data.superAdminUid.size() >= 1 && data.superAdminUid.size() <= 128 &&
-      data.superAdminEmail is string && data.superAdminEmail.size() >= 3 && data.superAdminEmail.size() <= 200 &&
-      data.superAdminName is string && data.superAdminName.size() >= 1 && data.superAdminName.size() <= 200 &&
-      data.provisionedAt is string && data.provisionedAt.size() >= 4 && data.provisionedAt.size() <= 60 &&
-      data.bootstrapMethod is string && data.bootstrapMethod.size() <= 50 && data.bootstrapMethod in ['verified_owner_session', 'one_time_setup_token'] &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -658,29 +471,19 @@ service cloud.firestore {
         'summaryBn', 'timestamp',
         'authorId', 'createdAt', 'updatedAt'
       ]) &&
-      data.action is string && data.action.size() <= 60 && data.action in [
-        'super_admin_bootstrapped', 'muhtamim_invited', 'staff_invited',
-        'invitation_activated', 'invitation_revoked', 'user_role_updated',
-        'user_status_suspended', 'user_status_activated', 'admission_approved'
-      ] &&
-      data.actorUid is string && data.actorUid.size() >= 1 && data.actorUid.size() <= 128 &&
-      data.actorEmail is string && data.actorEmail.size() <= 200 &&
-      data.actorRole is string && data.actorRole.size() <= 40 && data.actorRole in ['super_admin', 'muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'guardian', 'student', 'staff'] &&
-      data.targetUid is string && data.targetUid.size() >= 1 && data.targetUid.size() <= 128 &&
-      data.targetEmail is string && data.targetEmail.size() <= 200 &&
-      data.targetRole is string && data.targetRole.size() <= 40 && data.targetRole in ['super_admin', 'muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'guardian', 'student', 'staff'] &&
-      data.summaryBn is string && data.summaryBn.size() >= 1 && data.summaryBn.size() <= 600 &&
-      data.timestamp is string && data.timestamp.size() >= 4 && data.timestamp.size() <= 60 &&
-      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 && data.authorId.matches('^[a-zA-Z0-9_\\-]+$') &&
+      data.actorRole in ['super_admin', 'muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'guardian', 'student', 'staff'] &&
+      data.authorId is string && data.authorId.size() >= 1 && data.authorId.size() <= 128 &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
 
     // 4. Collection Match Blocks
-
     match /users/{userId} {
       allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
-      allow list: if isSignedIn() && (existing().uid == request.auth.uid || (isBootstrapSuperAdmin() && existing().uid is string));
+      allow list: if isSignedIn() && (
+        existing().uid == request.auth.uid ||
+        (isBootstrapSuperAdmin() && existing().status in ['active', 'pending', 'suspended'])
+      );
       allow create: if isSignedIn() && isValidId(userId) && isValidUserProfile(incoming()) &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time && (
@@ -716,6 +519,7 @@ service cloud.firestore {
       );
       allow list: if isSignedIn() && (
         existing().guardianUid == request.auth.uid ||
+        existing().studentUid == request.auth.uid ||
         existing().authorId == request.auth.uid ||
         (isBootstrapSuperAdmin() && existing().status in ['active', 'on_leave', 'graduated', 'transferred'])
       );
@@ -805,7 +609,7 @@ service cloud.firestore {
       allow list: if isSignedIn() && (
         (existing().guardianUid == request.auth.uid && existing().isPublished == true) ||
         existing().authorId == request.auth.uid ||
-        (isBootstrapSuperAdmin() && existing().academicYear is string)
+        (isBootstrapSuperAdmin() && existing().department in ['hifz', 'qawmi', 'general'])
       );
       allow create: if isSignedIn() && isValidId(examId) && isValidExamResult(incoming()) &&
         incoming().authorId == request.auth.uid &&
@@ -1031,6 +835,7 @@ service cloud.firestore {
         (resource != null && existing().theme in ['emerald', 'navy', 'ivory'])
       );
       allow list: if isSignedIn() && (
+        existing().category in ['academic', 'exam', 'admission', 'event'] ||
         existing().theme in ['emerald', 'navy', 'ivory'] ||
         existing().authorId == request.auth.uid
       );
@@ -1065,7 +870,7 @@ service cloud.firestore {
         ))
       );
       allow list: if isSignedIn() && (
-        (existing().visibleToGuardian == true && existing().guardianUid == request.auth.uid) ||
+        (existing().visibleToGuardian == true && (existing().guardianUid == request.auth.uid || existing().studentUid == request.auth.uid)) ||
         existing().authorId == request.auth.uid ||
         (isBootstrapSuperAdmin() && existing().completionStatus in ['pending', 'completed', 'needs_revision'])
       );
@@ -1256,7 +1061,7 @@ service cloud.firestore {
       allow get: if isSignedIn() && isValidId(logId) && isAdmin();
       allow list: if isSignedIn() && (
         existing().authorId == request.auth.uid ||
-        (isBootstrapSuperAdmin() && existing().actorUid is string)
+        (isBootstrapSuperAdmin() && existing().actorRole in ['super_admin', 'muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'guardian', 'student', 'staff'])
       );
       allow create: if isSignedIn() && isValidId(logId) && isValidAdminAuditLog(incoming()) &&
         incoming().authorId == request.auth.uid &&
@@ -1267,6 +1072,3 @@ service cloud.firestore {
     }
   }
 }
-
-
-

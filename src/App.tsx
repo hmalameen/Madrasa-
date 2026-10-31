@@ -636,11 +636,18 @@ export function MadrasaPortalApp() {
       )
     );
 
-    // 5. Exams listener — load all academic years for admins and decode workflow metadata
+    // 5. Exams listener — load all departments for admins and decode workflow metadata
     const examsQuery = isTrustedAdmin
-      ? query(collection(db, 'exams'), where('academicYear', '>=', ''))
+      ? query(
+          collection(db, 'exams'),
+          where('department', 'in', ['hifz', 'qawmi', 'general'])
+        )
       : isGuardianSession
-        ? query(collection(db, 'exams'), where('guardianUid', '==', uid))
+        ? query(
+            collection(db, 'exams'),
+            where('guardianUid', '==', uid),
+            where('isPublished', '==', true)
+          )
         : query(collection(db, 'exams'), where('authorId', '==', uid));
     unsubscribers.push(
       onSnapshot(
@@ -1062,9 +1069,18 @@ export function MadrasaPortalApp() {
 
     // 18. Account Invitations listener for authorized admins
     if (isTrustedAdmin) {
+      const invitationsQuery = query(
+        collection(db, 'accountInvitations'),
+        where('status', 'in', [
+          'pending_activation',
+          'activated',
+          'revoked',
+          'expired',
+        ])
+      );
       unsubscribers.push(
         onSnapshot(
-          collection(db, 'accountInvitations'),
+          invitationsQuery,
           (snap) => {
             const cloudInvites = snap.docs.map((d) => ({
               ...(d.data() as AccountInvitation),
@@ -1106,9 +1122,22 @@ export function MadrasaPortalApp() {
       );
 
       // 20. Administrative Audit Logs listener
+      const auditLogsQuery = query(
+        collection(db, 'adminAuditLogs'),
+        where('actorRole', 'in', [
+          'super_admin',
+          'muhtamim',
+          'teacher',
+          'accountant',
+          'residential_supervisor',
+          'guardian',
+          'student',
+          'staff',
+        ])
+      );
       unsubscribers.push(
         onSnapshot(
-          collection(db, 'adminAuditLogs'),
+          auditLogsQuery,
           (snap) => {
             const cloudLogs = snap.docs.map((d) => ({
               ...(d.data() as AdminAuditLog),
@@ -1328,7 +1357,7 @@ export function MadrasaPortalApp() {
     };
   };
 
-  // Safely initialize missing reference seed records into Cloud Firestore without overwriting existing records
+  // Safely initialize missing institution settings and banner configuration without injecting demo students/staff into production
   const handleSyncSeedToFirestore = async () => {
     if (!firebaseUser) return;
     setIsSyncingSeed(true);
@@ -1343,8 +1372,8 @@ export function MadrasaPortalApp() {
       data: Record<string, unknown>
     ) => {
       const ref = doc(db, collectionName, docId);
-      const snap = await getDoc(ref);
-      if (!snap.exists()) {
+      const snap = await getExistingDocIfPresent(ref);
+      if (!snap) {
         await setDoc(ref, {
           ...data,
           authorId: uid,
@@ -1356,81 +1385,32 @@ export function MadrasaPortalApp() {
     };
 
     try {
-      for (const st of INITIAL_STUDENTS) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = st;
-        await createIfNotExists('students', id, rest);
-      }
-      for (const member of INITIAL_STAFF) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = member;
-        await createIfNotExists('staff', id, rest);
-      }
-      for (const notice of INITIAL_NOTICES) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = notice;
-        await createIfNotExists('notices', id, rest);
-      }
-      for (const att of INITIAL_ATTENDANCE) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = att;
-        await createIfNotExists('attendance', id, rest);
-      }
-      for (const exm of INITIAL_EXAMS) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = exm;
-        await createIfNotExists('exams', id, rest);
-      }
-      for (const inv of INITIAL_INVOICES) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = inv;
-        await createIfNotExists('invoices', id, rest);
-      }
-      for (const exp of INITIAL_EXPENSES) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = exp;
-        await createIfNotExists('expenses', id, rest);
-      }
-      for (const hfz of INITIAL_HIFZ_LOGS) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = hfz;
-        await createIfNotExists('hifzLogs', id, rest);
-      }
-      for (const lve of INITIAL_LEAVES) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = lve;
-        await createIfNotExists('residentialLeaves', id, rest);
-      }
-      for (const pay of INITIAL_PAYROLL) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = pay;
-        await createIfNotExists('payroll', id, rest);
-      }
       for (const slide of INITIAL_BANNER_SLIDES) {
         const { id, createdAt, updatedAt, ...rest } = slide;
         await createIfNotExists('bannerSlides', id, rest);
       }
-      for (const entry of INITIAL_STUDY_DIARY) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = entry;
-        await createIfNotExists('studyDiary', id, rest);
-      }
-      for (const inq of INITIAL_GUARDIAN_INQUIRIES) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = inq;
-        await createIfNotExists('guardianInquiries', id, rest);
-      }
-      for (const app of INITIAL_ADMISSION_APPLICATIONS) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = app;
-        await createIfNotExists('admissionApplications', id, rest);
-      }
-      for (const req of INITIAL_GUARDIAN_LINK_REQUESTS) {
-        const { id, isDemoRecord, createdAt, updatedAt, ...rest } = req;
-        await createIfNotExists('guardianLinkRequests', id, rest);
-      }
-      const { id: settingsId, createdAt: sCreated, updatedAt: sUpdated, ...settingsRest } =
-        INITIAL_SETTINGS;
-      await createIfNotExists('settings', settingsId || 'default-settings', settingsRest);
+      const settingsPayload = buildCompleteInstitutionSettingsPayload(
+        settings,
+        undefined,
+        INITIAL_SETTINGS
+      );
+      await createIfNotExists(
+        'settings',
+        settings.id || 'default-settings',
+        settingsPayload as unknown as Record<string, unknown>
+      );
 
       setOperationSuccess(
         createdCount > 0
-          ? `${createdCount}টি নতুন প্রারম্ভিক রেকর্ড ক্লাউড ডাটাবেসে সংরক্ষিত হয়েছে (বিদ্যমান কোনো রেকর্ড পরিবর্তন করা হয়নি)।`
-          : 'সকল প্রারম্ভিক রেকর্ড ইতিমধ্যে ক্লাউড ডাটাবেসে বিদ্যমান রয়েছে (কোনো তথ্য ওভাররাইট করা হয়নি)।'
+          ? `${createdCount}টি প্রারম্ভিক প্রাতিষ্ঠানিক কনফিগারেশন ক্লাউড ডাটাবেসে সংরক্ষিত হয়েছে (বিদ্যমান কোনো রেকর্ড পরিবর্তন করা হয়নি)।`
+          : 'প্রাতিষ্ঠানিক সেটিংস ও ব্যানার কনফিগারেশন ইতিমধ্যে ক্লাউড ডাটাবেসে বিদ্যমান রয়েছে।'
       );
     } catch (err) {
       reportDatabaseError(
         err,
         OperationType.WRITE,
         'seed-sync',
-        'প্রারম্ভিক ডাটাবেস সিঙ্ক সম্পন্ন করা যায়নি'
+        'প্রাতিষ্ঠানিক কনফিগারেশন সিঙ্ক সম্পন্ন করা যায়নি'
       );
     } finally {
       setIsSyncingSeed(false);
@@ -1722,8 +1702,25 @@ export function MadrasaPortalApp() {
 
     if (firebaseUser) {
       try {
+        const encodedGrade = encodeGradeWithWorkflowMeta(
+          result.grade,
+          result.workflowStatus || (result.isPublished ? 'published' : 'draft'),
+          result.auditHistory
+        );
         await setDoc(doc(db, 'exams', id), {
-          ...result,
+          examName: result.examName,
+          academicYear: result.academicYear,
+          studentId: result.studentId,
+          studentNameBn: result.studentNameBn,
+          admissionNo: result.admissionNo,
+          className: result.className,
+          department: result.department,
+          subjectName: result.subjectName,
+          marksObtained: result.marksObtained,
+          fullMarks: result.fullMarks,
+          grade: encodedGrade,
+          isPublished: Boolean(result.isPublished),
+          guardianUid: result.guardianUid || '',
           authorId: uid,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -1754,20 +1751,38 @@ export function MadrasaPortalApp() {
     if (!targetExam) return false;
     setOperationError(null);
 
+    const nextWorkflowStatus = isPublished ? 'published' : 'draft';
+    const encodedGrade = encodeGradeWithWorkflowMeta(
+      targetExam.grade,
+      nextWorkflowStatus,
+      targetExam.auditHistory
+    );
+
     if (firebaseUser) {
       const exmRef = doc(db, 'exams', examId);
       try {
-        const snap = await getDoc(exmRef);
-        if (snap.exists()) {
+        const snap = await getExistingDocIfPresent(exmRef);
+        if (snap) {
           await updateDoc(exmRef, {
             isPublished,
+            grade: encodedGrade,
             updatedAt: serverTimestamp(),
           });
         } else {
-          const { id, isDemoRecord, createdAt, updatedAt, ...rest } = targetExam;
           await setDoc(exmRef, {
-            ...rest,
+            examName: targetExam.examName,
+            academicYear: targetExam.academicYear,
+            studentId: targetExam.studentId,
+            studentNameBn: targetExam.studentNameBn,
+            admissionNo: targetExam.admissionNo,
+            className: targetExam.className,
+            department: targetExam.department,
+            subjectName: targetExam.subjectName,
+            marksObtained: targetExam.marksObtained,
+            fullMarks: targetExam.fullMarks,
+            grade: encodedGrade,
             isPublished,
+            guardianUid: targetExam.guardianUid || '',
             authorId: firebaseUser.uid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -1790,7 +1805,7 @@ export function MadrasaPortalApp() {
           ? {
               ...e,
               isPublished,
-              workflowStatus: isPublished ? 'published' : 'draft',
+              workflowStatus: nextWorkflowStatus,
             }
           : e
       )
@@ -1834,7 +1849,12 @@ export function MadrasaPortalApp() {
       try {
         for (const rec of normalizedRecords) {
           const exmRef = doc(db, 'exams', rec.id);
-          const snap = await getDoc(exmRef);
+          const snap = await getExistingDocIfPresent(exmRef);
+          const encodedGrade = encodeGradeWithWorkflowMeta(
+            rec.grade,
+            rec.workflowStatus || (rec.isPublished ? 'published' : 'draft'),
+            rec.auditHistory
+          );
           const corePayload = {
             examName: rec.examName,
             academicYear: rec.academicYear,
@@ -1846,12 +1866,12 @@ export function MadrasaPortalApp() {
             subjectName: rec.subjectName,
             marksObtained: rec.marksObtained,
             fullMarks: rec.fullMarks,
-            grade: rec.grade,
+            grade: encodedGrade,
             isPublished: Boolean(rec.isPublished),
             guardianUid: rec.guardianUid || '',
             authorId: uid,
           };
-          if (snap.exists()) {
+          if (snap) {
             await setDoc(exmRef, {
               ...corePayload,
               authorId: snap.data().authorId || uid,
@@ -1888,6 +1908,78 @@ export function MadrasaPortalApp() {
       return Array.from(updatedMap.values());
     });
 
+    return true;
+  };
+
+  const handleSaveExamSetup = async (
+    setupInput: Omit<ExaminationSetup, 'id'> & { id?: string }
+  ): Promise<boolean> => {
+    if (!['super_admin', 'muhtamim'].includes(activeRole)) {
+      setOperationError(
+        'শুধুমাত্র সুপার অ্যাডমিন ও মুহতামিম পরীক্ষার কনফিগারেশন সংরক্ষণ করতে পারবেন।'
+      );
+      return false;
+    }
+    if (!setupInput.examName.trim() || !setupInput.academicYear.trim()) {
+      setOperationError('পরীক্ষার নাম ও শিক্ষাবর্ষ প্রদান করা আবশ্যক।');
+      return false;
+    }
+    setOperationError(null);
+
+    const existingSetup = examSetups.find(
+      (s) =>
+        (setupInput.id && s.id === setupInput.id) ||
+        (s.examName.trim().toLowerCase() ===
+          setupInput.examName.trim().toLowerCase() &&
+          s.academicYear.trim().toLowerCase() ===
+            setupInput.academicYear.trim().toLowerCase())
+    );
+    const setupId = existingSetup?.id || setupInput.id || `exm-setup-${Date.now()}`;
+    const fullSetup: ExaminationSetup = {
+      ...setupInput,
+      id: setupId,
+    };
+
+    if (firebaseUser) {
+      const setupDocRef = doc(db, 'settings', setupId);
+      const envelope = encodeExamSetupAsSettingsEnvelope(
+        fullSetup,
+        settings,
+        firebaseUser.uid
+      );
+      try {
+        const snap = await getExistingDocIfPresent(setupDocRef);
+        if (snap) {
+          await updateDoc(setupDocRef, {
+            ...envelope,
+            authorId: snap.data().authorId || firebaseUser.uid,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(setupDocRef, {
+            ...envelope,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        reportDatabaseError(
+          err,
+          OperationType.WRITE,
+          `settings/${setupId}`,
+          'পরীক্ষার কনফিগারেশন সংরক্ষণ ব্যর্থ হয়েছে'
+        );
+        return false;
+      }
+    }
+
+    setExamSetups((prev) => {
+      const exists = prev.some((s) => s.id === setupId);
+      if (exists) {
+        return prev.map((s) => (s.id === setupId ? fullSetup : s));
+      }
+      return [fullSetup, ...prev];
+    });
     return true;
   };
 
@@ -2193,55 +2285,79 @@ export function MadrasaPortalApp() {
       setOperationError('শুধুমাত্র সুপার অ্যাডমিন ও মুহতামিম প্রতিষ্ঠানের সেটিংস পরিবর্তন করতে পারবেন।');
       return false;
     }
+
+    const validation = validateInstitutionSettings(updated);
+    if (!validation.valid) {
+      setOperationError(
+        validation.errorBn || 'প্রতিষ্ঠানের সেটিংস তথ্য সঠিক নয়। অনুগ্রহ করে সকল ঘর যাচাই করুন।'
+      );
+      return false;
+    }
+
     setOperationError(null);
+    let mergedSettings: InstitutionSettings = {
+      ...settings,
+      ...updated,
+    };
 
     if (firebaseUser) {
-      const { id, authorId, createdAt, updatedAt, ...rest } = updated;
-      const settingsRef = doc(db, 'settings', 'default-settings');
+      const settingsDocId = updated.id || settings.id || 'default-settings';
+      const settingsRef = doc(db, 'settings', settingsDocId);
       try {
-        const snap = await getDoc(settingsRef);
-        if (snap.exists()) {
-          // Preserve immutable createdAt and authorId on update
+        const snap = await getExistingDocIfPresent(settingsRef);
+        const existingData = snap
+          ? (snap.data() as Partial<InstitutionSettings>)
+          : settings;
+        const completePayload = buildCompleteInstitutionSettingsPayload(
+          updated,
+          existingData,
+          INITIAL_SETTINGS
+        );
+
+        if (snap) {
+          // Preserve immutable createdAt and authorId while saving all required schema fields
           await updateDoc(settingsRef, {
-            institutionNameBn: rest.institutionNameBn,
-            institutionNameEn: rest.institutionNameEn,
-            institutionNameAr: rest.institutionNameAr,
-            academicYear: rest.academicYear,
-            hijriYear: rest.hijriYear,
-            addressBn: rest.addressBn,
-            phone: rest.phone,
-            email: rest.email,
-            gradingSystem: rest.gradingSystem,
+            ...completePayload,
             updatedAt: serverTimestamp(),
           });
         } else {
           await setDoc(settingsRef, {
-            institutionNameBn: rest.institutionNameBn,
-            institutionNameEn: rest.institutionNameEn,
-            institutionNameAr: rest.institutionNameAr,
-            academicYear: rest.academicYear,
-            hijriYear: rest.hijriYear,
-            addressBn: rest.addressBn,
-            phone: rest.phone,
-            email: rest.email,
-            gradingSystem: rest.gradingSystem,
+            ...completePayload,
             authorId: firebaseUser.uid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
         }
+
+        mergedSettings = {
+          ...existingData,
+          ...completePayload,
+          id: settingsDocId,
+          authorId: (existingData?.authorId as string) || firebaseUser.uid,
+        };
       } catch (err) {
         reportDatabaseError(
           err,
           OperationType.WRITE,
-          'settings/default-settings',
+          `settings/${settingsDocId}`,
           'প্রতিষ্ঠানের সেটিংস সংরক্ষণ ব্যর্থ হয়েছে'
         );
         return false;
       }
+    } else {
+      const completePayload = buildCompleteInstitutionSettingsPayload(
+        updated,
+        settings,
+        INITIAL_SETTINGS
+      );
+      mergedSettings = {
+        ...settings,
+        ...completePayload,
+        id: updated.id || settings.id || 'default-settings',
+      };
     }
 
-    setSettings(updated);
+    setSettings(mergedSettings);
     return true;
   };
 
@@ -2356,14 +2472,11 @@ export function MadrasaPortalApp() {
       return false;
     }
     setOperationError(null);
-    setBannerSlides((prev) =>
-      prev.map((s) => (s.id === updatedSlide.id ? updatedSlide : s))
-    );
 
     if (firebaseUser) {
       const slideRef = doc(db, 'bannerSlides', updatedSlide.id);
       try {
-        const snap = await getDoc(slideRef);
+        const snap = await getExistingDocIfPresent(slideRef);
         const slidePayload = {
           category: updatedSlide.category,
           badgeBn: updatedSlide.badgeBn,
@@ -2383,7 +2496,7 @@ export function MadrasaPortalApp() {
           theme: updatedSlide.theme,
           isActive: updatedSlide.isActive,
         };
-        if (snap.exists()) {
+        if (snap) {
           // Preserve createdAt and authorId on update
           await updateDoc(slideRef, {
             ...slidePayload,
@@ -2407,6 +2520,10 @@ export function MadrasaPortalApp() {
         return false;
       }
     }
+
+    setBannerSlides((prev) =>
+      prev.map((s) => (s.id === updatedSlide.id ? updatedSlide : s))
+    );
     return true;
   };
 
@@ -3215,7 +3332,14 @@ export function MadrasaPortalApp() {
     );
     if (!existingStaffMember && built.staffRecord) {
       const { id, isDemoRecord, createdAt, updatedAt, ...staffRest } = built.staffRecord;
-      await handleAddStaff(staffRest);
+      const staffSaved = await handleAddStaff(staffRest);
+      if (!staffSaved) {
+        return {
+          ok: false,
+          messageBn:
+            'স্টাফ প্রোফাইল ক্লাউড ডাটাবেসে সংরক্ষণ ব্যর্থ হওয়ায় আমন্ত্রণ কোড ইস্যু করা যায়নি।',
+        };
+      }
     }
 
     if (firebaseUser) {
@@ -3234,8 +3358,18 @@ export function MadrasaPortalApp() {
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
-      } catch {
-        // Local state still updated
+      } catch (err) {
+        reportDatabaseError(
+          err,
+          OperationType.CREATE,
+          `accountInvitations/${inv.id}`,
+          'স্টাফ অ্যাক্টিভেশন আমন্ত্রণ ডাটাবেসে সংরক্ষণ ব্যর্থ হয়েছে'
+        );
+        return {
+          ok: false,
+          messageBn:
+            'স্টাফ অ্যাক্টিভেশন আমন্ত্রণ ক্লাউড ডাটাবেসে সংরক্ষণ করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।',
+        };
       }
     }
 
@@ -3272,6 +3406,7 @@ export function MadrasaPortalApp() {
       return false;
     }
 
+    setOperationError(null);
     const updatedInv: AccountInvitation = {
       ...targetInv,
       status: 'revoked',
@@ -3281,15 +3416,28 @@ export function MadrasaPortalApp() {
       try {
         const invRef = doc(db, 'accountInvitations', invitationId);
         const { id, isDemoRecord, createdAt, updatedAt, ...cleanInv } = updatedInv;
-        const snap = await getDoc(invRef);
-        if (snap.exists()) {
+        const snap = await getExistingDocIfPresent(invRef);
+        if (snap) {
           await updateDoc(invRef, {
             ...cleanInv,
             updatedAt: serverTimestamp(),
           });
+        } else {
+          await setDoc(invRef, {
+            ...cleanInv,
+            authorId: firebaseUser.uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
         }
-      } catch {
-        // Local state updated below
+      } catch (err) {
+        reportDatabaseError(
+          err,
+          OperationType.UPDATE,
+          `accountInvitations/${invitationId}`,
+          'অ্যাক্টিভেশন আমন্ত্রণ বাতিল করা যায়নি'
+        );
+        return false;
       }
     }
 
