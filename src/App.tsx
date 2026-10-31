@@ -42,6 +42,7 @@ import {
   BOOTSTRAP_SUPER_ADMIN_EMAIL,
   db,
   handleFirestoreError,
+  isBootstrapSuperAdminEmail,
   OperationType,
   registerWithEmailPassword,
   requestPasswordResetEmail,
@@ -372,7 +373,7 @@ export function MadrasaPortalApp() {
         return;
       }
 
-      const isSuperAdmin = user.email === BOOTSTRAP_SUPER_ADMIN_EMAIL;
+      const isSuperAdmin = isBootstrapSuperAdminEmail(user.email);
       const defaultRole: UserRole = isSuperAdmin ? 'super_admin' : 'guardian';
       const defaultStatus = isSuperAdmin ? 'active' : 'pending';
       setActiveRole(defaultRole);
@@ -426,15 +427,39 @@ export function MadrasaPortalApp() {
             }
           } else {
             const data = snap.data() as UserProfile;
+            const resolvedRole: UserRole = isSuperAdmin
+              ? 'super_admin'
+              : (data.role as UserRole) || 'guardian';
+            const resolvedStatus: UserProfile['status'] = isSuperAdmin
+              ? 'active'
+              : data.status || 'pending';
             const loadedProfile: UserProfile = {
               ...data,
               id: snap.id,
               uid: data.uid || snap.id,
+              role: resolvedRole,
+              status: resolvedStatus,
+              assignedClasses:
+                isSuperAdmin && !data.assignedClasses
+                  ? 'সকল জামাত'
+                  : data.assignedClasses || '',
             };
             setCurrentUserProfile(loadedProfile);
-            if (data?.role) {
-              setActiveRole(data.role as UserRole);
+            setActiveRole(resolvedRole);
+
+            if (isSuperAdmin && (data.role !== 'super_admin' || data.status !== 'active')) {
+              try {
+                await updateDoc(userDocRef, {
+                  role: 'super_admin',
+                  status: 'active',
+                  assignedClasses: loadedProfile.assignedClasses,
+                  updatedAt: serverTimestamp(),
+                });
+              } catch {
+                // Best-effort profile upgrade
+              }
             }
+
             const redirectInfo = resolvePostLoginRedirect(loadedProfile);
             if (redirectInfo.screen === 'portal') {
               setActiveModule((prevModule) =>
@@ -466,7 +491,7 @@ export function MadrasaPortalApp() {
     setFirestoreSyncStatus('loading');
 
     const uid = firebaseUser.uid;
-    const isBootstrapAdmin = firebaseUser.email === BOOTSTRAP_SUPER_ADMIN_EMAIL;
+    const isBootstrapAdmin = isBootstrapSuperAdminEmail(firebaseUser.email);
     const effectiveRole = currentUserProfile?.role || activeRole;
     const isTrustedAdmin =
       isBootstrapAdmin || effectiveRole === 'super_admin' || effectiveRole === 'muhtamim';
@@ -1188,6 +1213,12 @@ export function MadrasaPortalApp() {
     setAuthError(null);
     try {
       const cred = await signInWithGoogle();
+      if (isBootstrapSuperAdminEmail(cred.user.email)) {
+        setActiveRole('super_admin');
+        setActiveModule('dashboard');
+        setShowLoginGate(false);
+        return;
+      }
       const userSnap = await getDoc(doc(db, 'users', cred.user.uid));
       if (userSnap.exists()) {
         const prof = userSnap.data() as UserProfile;
@@ -1197,10 +1228,6 @@ export function MadrasaPortalApp() {
           setActiveModule(redirectInfo.targetModule);
           setShowLoginGate(false);
         }
-      } else if (cred.user.email === BOOTSTRAP_SUPER_ADMIN_EMAIL) {
-        setActiveRole('super_admin');
-        setActiveModule('dashboard');
-        setShowLoginGate(false);
       }
     } catch (err) {
       setAuthError(
@@ -1234,6 +1261,12 @@ export function MadrasaPortalApp() {
 
     try {
       const cred = await signInWithEmailPassword(classified.normalized, password);
+      if (isBootstrapSuperAdminEmail(cred.user.email)) {
+        setActiveRole('super_admin');
+        setActiveModule('dashboard');
+        setShowLoginGate(false);
+        return { ok: true, status: 'active' };
+      }
       const userSnap = await getDoc(doc(db, 'users', cred.user.uid));
       if (userSnap.exists()) {
         const prof = userSnap.data() as UserProfile;
@@ -1245,12 +1278,6 @@ export function MadrasaPortalApp() {
           return { ok: true, status: 'active' };
         }
         return { ok: true, status: prof.status };
-      }
-      if (cred.user.email === BOOTSTRAP_SUPER_ADMIN_EMAIL) {
-        setActiveRole('super_admin');
-        setActiveModule('dashboard');
-        setShowLoginGate(false);
-        return { ok: true, status: 'active' };
       }
       return { ok: true, status: 'pending' };
     } catch (err) {
@@ -2916,12 +2943,21 @@ export function MadrasaPortalApp() {
           updatedAt: sInvUpdated,
           ...sInvRest
         } = invPkg.studentInvitation;
-        await setDoc(stuInvRef, {
-          ...sInvRest,
-          authorId: uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+        const stuInvSnap = await getExistingDocIfPresent(stuInvRef);
+        if (stuInvSnap) {
+          await updateDoc(stuInvRef, {
+            ...sInvRest,
+            authorId: uid,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(stuInvRef, {
+            ...sInvRest,
+            authorId: uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
 
         if (invPkg.guardianInvitation) {
           const grdInvRef = doc(db, 'accountInvitations', invPkg.guardianInvitation.id);
@@ -2932,12 +2968,21 @@ export function MadrasaPortalApp() {
             updatedAt: gInvUpdated,
             ...gInvRest
           } = invPkg.guardianInvitation;
-          await setDoc(grdInvRef, {
-            ...gInvRest,
-            authorId: uid,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
+          const grdInvSnap = await getExistingDocIfPresent(grdInvRef);
+          if (grdInvSnap) {
+            await updateDoc(grdInvRef, {
+              ...gInvRest,
+              authorId: uid,
+              updatedAt: serverTimestamp(),
+            });
+          } else {
+            await setDoc(grdInvRef, {
+              ...gInvRest,
+              authorId: uid,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+          }
         }
 
         // Persist guardian account link in Firestore if guardianUid is present
@@ -3131,7 +3176,9 @@ export function MadrasaPortalApp() {
       candidateEmail: payload.ownerEmail,
       candidateDisplayName: payload.displayName,
       candidatePhone: payload.phone,
-      allowedBootstrapEmail: BOOTSTRAP_SUPER_ADMIN_EMAIL,
+      allowedBootstrapEmail: isBootstrapSuperAdminEmail(payload.ownerEmail)
+        ? payload.ownerEmail.trim().toLowerCase()
+        : BOOTSTRAP_SUPER_ADMIN_EMAIL,
       setupTokenInput: providedToken,
       expectedSetupToken: providedToken.length >= 12 ? providedToken : 'UQCM-BOOTSTRAP-2026',
     });
@@ -3343,8 +3390,9 @@ export function MadrasaPortalApp() {
     }
 
     if (firebaseUser) {
+      const invRef = doc(db, 'accountInvitations', inv.id);
+      let isExistingDoc = false;
       try {
-        const invRef = doc(db, 'accountInvitations', inv.id);
         const {
           id: invId,
           isDemoRecord: invDemo,
@@ -3352,16 +3400,26 @@ export function MadrasaPortalApp() {
           updatedAt: invUpdated,
           ...invRest
         } = inv;
-        await setDoc(invRef, {
-          ...invRest,
-          authorId: firebaseUser.uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+        const existingInvSnap = await getExistingDocIfPresent(invRef);
+        isExistingDoc = Boolean(existingInvSnap);
+        if (existingInvSnap) {
+          await updateDoc(invRef, {
+            ...invRest,
+            authorId: firebaseUser.uid,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(invRef, {
+            ...invRest,
+            authorId: firebaseUser.uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
       } catch (err) {
         reportDatabaseError(
           err,
-          OperationType.CREATE,
+          isExistingDoc ? OperationType.UPDATE : OperationType.CREATE,
           `accountInvitations/${inv.id}`,
           'স্টাফ অ্যাক্টিভেশন আমন্ত্রণ ডাটাবেসে সংরক্ষণ ব্যর্থ হয়েছে'
         );
@@ -3556,6 +3614,23 @@ export function MadrasaPortalApp() {
       recipientEmail: normalizedEmail,
       redeemedByUid: activatedUid,
     };
+
+    if (auth.currentUser) {
+      try {
+        const invRef = doc(db, 'accountInvitations', finalRedeemed.id);
+        const existingInvSnap = await getExistingDocIfPresent(invRef);
+        if (existingInvSnap) {
+          await updateDoc(invRef, {
+            status: 'activated',
+            redeemedByUid: activatedUid,
+            redeemedAt: finalRedeemed.redeemedAt,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch {
+        // Non-fatal if redeemed in sandbox mode without cloud invitation document
+      }
+    }
 
     // Mark invitation as used in state (single-use enforcement)
     setAccountInvitations((prev) =>

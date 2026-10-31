@@ -39,6 +39,15 @@ export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
 
 export const BOOTSTRAP_SUPER_ADMIN_EMAIL = 'hmalameenemob@gmail.com';
+export const BOOTSTRAP_SUPER_ADMIN_EMAILS = [
+  'hmalameenemob@gmail.com',
+  'alamin.emob@gmail.com',
+];
+
+export function isBootstrapSuperAdminEmail(email?: string | null): boolean {
+  if (!email) return false;
+  return BOOTSTRAP_SUPER_ADMIN_EMAILS.includes(email.trim().toLowerCase());
+}
 
 export async function uploadStudentPhotoAsset(
   blob: Blob,

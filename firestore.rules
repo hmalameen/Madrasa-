@@ -26,7 +26,16 @@ service cloud.firestore {
     }
 
     function isBootstrapSuperAdmin() {
-      return isSignedIn() && request.auth.token.email == 'hmalameenemob@gmail.com';
+      return isSignedIn() && (
+        request.auth.token.email in [
+          'hmalameenemob@gmail.com',
+          'alamin.emob@gmail.com'
+        ] ||
+        request.auth.uid in [
+          'irkwtfGd6PVGPIdVOjTSsRC9Iat1',
+          'WW8QrduqbjMIcLk8oqBdtvxx1oC2'
+        ]
+      );
     }
 
     function userProfileData() {
@@ -801,10 +810,7 @@ service cloud.firestore {
     }
 
     match /settings/{settingId} {
-      allow get: if isSignedIn() && isValidId(settingId) && (
-        isAdmin() ||
-        (resource != null && existing().defaultLanguage in ['bn', 'en', 'ar'])
-      );
+      allow get: if isSignedIn() && isValidId(settingId);
       allow list: if isSignedIn() && (
         existing().defaultLanguage in ['bn', 'en', 'ar'] ||
         existing().institutionNameEn == 'EXAM_SETUP_CONFIG' ||
@@ -830,10 +836,7 @@ service cloud.firestore {
     }
 
     match /bannerSlides/{slideId} {
-      allow get: if isSignedIn() && isValidId(slideId) && (
-        isAdmin() ||
-        (resource != null && existing().theme in ['emerald', 'navy', 'ivory'])
-      );
+      allow get: if isSignedIn() && isValidId(slideId);
       allow list: if isSignedIn() && (
         existing().category in ['academic', 'exam', 'admission', 'event'] ||
         existing().theme in ['emerald', 'navy', 'ivory'] ||
@@ -1007,8 +1010,10 @@ service cloud.firestore {
     match /accountInvitations/{inviteId} {
       allow get: if isSignedIn() && isValidId(inviteId) && (
         hasRole(['super_admin', 'muhtamim', 'staff']) ||
-        existing().redeemedByUid == request.auth.uid ||
-        existing().status == 'pending_activation'
+        (resource != null && (
+          existing().redeemedByUid == request.auth.uid ||
+          existing().status == 'pending_activation'
+        ))
       );
       allow list: if isSignedIn() && (
         existing().redeemedByUid == request.auth.uid ||
@@ -1024,8 +1029,6 @@ service cloud.firestore {
         );
       allow update: if isSignedIn() && isValidId(inviteId) && isValidAccountInvitation(incoming()) &&
         (incoming().authorId == existing().authorId || (isAdmin() && incoming().authorId == request.auth.uid)) &&
-        incoming().invitationCode == existing().invitationCode &&
-        incoming().studentId == existing().studentId &&
         incoming().targetRole == existing().targetRole &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
@@ -1033,6 +1036,8 @@ service cloud.firestore {
           (hasRole(['muhtamim']) && existing().targetRole != 'muhtamim') ||
           (existing().status == 'pending_activation' &&
             incoming().status == 'activated' &&
+            incoming().invitationCode == existing().invitationCode &&
+            incoming().studentId == existing().studentId &&
             incoming().redeemedByUid == request.auth.uid &&
             incoming().diff(existing()).affectedKeys().hasOnly(['status', 'redeemedByUid', 'redeemedAt', 'updatedAt']))
         );
