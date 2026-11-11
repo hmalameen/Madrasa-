@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
 import {
   collection,
@@ -21,6 +21,7 @@ import {
   CloudUpload,
   CreditCard,
   FileSpreadsheet,
+  Globe,
   GraduationCap,
   Home,
   LayoutDashboard,
@@ -68,6 +69,7 @@ import type {
   FeeInvoice,
   GuardianInquiry,
   GuardianLinkRequest,
+  GuardianVerificationMethod,
   HifzProgressLog,
   InstitutionSettings,
   InvitationTargetRole,
@@ -82,32 +84,51 @@ import type {
   SuperAdminBootstrapLock,
   UserProfile,
   UserRole,
+  WebsiteCmsConfig,
 } from './types/madrasa';
 import { TRANSLATIONS } from './i18n/translations';
 import {
   buildAccountProvisioningPackage,
   buildCompleteInstitutionSettingsPayload,
   buildProvisionedStudentFromApplication,
+  buildSanitizedPublicCmsSnapshot,
   buildStaffAccountInvitation,
   canAccessModule,
+  canActivateStudentAccount,
   canApproveAdmissions,
+  canManageWebsiteCms,
   canModifyUserAccountRoleOrStatus,
   canReplaceApprovedStudentPhoto,
   classifyLoginIdentifier,
+  CMS_LOCAL_CACHE_KEY,
   decodeExamResultFromFirestore,
   decodeExamSetupFromSettingsEnvelope,
+  decodePublicCmsFromSettingsEnvelope,
+  decodeWebsiteCmsFromSettingsEnvelope,
   encodeExamSetupAsSettingsEnvelope,
   encodeGradeWithWorkflowMeta,
+  encodePublicCmsAsSettingsEnvelope,
+  encodeWebsiteCmsAsSettingsEnvelope,
+  findExistingGuardianUser,
   getAllowedModules,
+  INITIAL_WEBSITE_CMS_CONFIG,
   isSuperAdminAlreadyProvisioned,
   mergeLinkedStudentIds,
+  normalizeBangladeshPhone,
+  PUBLIC_WEBSITE_CMS_SETTINGS_DOC_ID,
+  type PublicPublishedCmsSnapshot,
+  publicSnapshotToWebsiteCmsConfig,
   reconcileFirestoreSnapshot,
   type RegistrationFormInput,
+  resolveCanonicalGuardianPhoneAuthEmail,
+  resolveCanonicalStudentAuthEmail,
+  resolveGuardianVerificationMethod,
   resolvePostLoginRedirect,
   type StaffInvitationInput,
   validateAndRedeemActivationInvitation,
   validateInstitutionSettings,
   validateSuperAdminBootstrapAttempt,
+  WEBSITE_CMS_SETTINGS_DOC_ID,
 } from './utils/madrasaLogic';
 import {
   INITIAL_BANNER_SLIDES,
@@ -140,6 +161,33 @@ import {
   ReportsModule,
   SettingsModule,
 } from './components/Modules/NoticesReportsSettingsModule';
+import { WebsiteCmsModule } from './components/Modules/WebsiteCmsModule';
+import { PublicHomePage } from './components/PublicWebsite/PublicHomePage';
+import { PublicPages } from './components/PublicWebsite/PublicPages';
+import type { PublicPagePath } from './components/PublicWebsite/PublicNavbar';
+
+const PUBLIC_SUBPAGE_PATHS: PublicPagePath[] = [
+  '/about',
+  '/academic',
+  '/departments',
+  '/teachers',
+  '/administration',
+  '/admission',
+  '/notices',
+  '/events',
+  '/gallery',
+  '/contact',
+];
+
+function resolvePublicPagePathFromPathname(pathname: string): PublicPagePath {
+  const clean = (pathname.toLowerCase().replace(/\/+$/, '') || '/') as string;
+  for (const sub of PUBLIC_SUBPAGE_PATHS) {
+    if (clean === sub || clean.startsWith(`${sub}/`)) {
+      return sub;
+    }
+  }
+  return '/';
+}
 
 const MODULE_ICONS: Record<ModuleId, React.ComponentType<{ className?: string }>> = {
   dashboard: LayoutDashboard,
@@ -155,6 +203,7 @@ const MODULE_ICONS: Record<ModuleId, React.ComponentType<{ className?: string }>
   student_portal: GraduationCap,
   guardian: UserCheck,
   notices: Megaphone,
+  website_cms: Globe,
   reports: FileSpreadsheet,
   settings: Settings,
 };
@@ -195,7 +244,38 @@ export function MadrasaPortalApp() {
     }
     return 'dashboard';
   });
-  const [showLoginGate, setShowLoginGate] = useState<boolean>(true);
+  const [publicPagePath, setPublicPagePath] = useState<PublicPagePath>(() => {
+    try {
+      return resolvePublicPagePathFromPathname(window.location.pathname);
+    } catch {
+      return '/';
+    }
+  });
+  const [showPublicWebsite, setShowPublicWebsite] = useState<boolean>(() => {
+    try {
+      const path = window.location.pathname.toLowerCase();
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('activate')) return false;
+      if (path.startsWith('/login') || path.startsWith('/portal')) {
+        return false;
+      }
+      return true;
+    } catch {
+      return true;
+    }
+  });
+  const [showLoginGate, setShowLoginGate] = useState<boolean>(() => {
+    try {
+      const path = window.location.pathname.toLowerCase();
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('activate') || path.startsWith('/login') || path.startsWith('/portal')) {
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  });
   const [mobileMenuOpen, setMobileMenuOpen] = useState<boolean>(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState<boolean>(false);
 
@@ -225,6 +305,39 @@ export function MadrasaPortalApp() {
   const [payroll, setPayroll] = useState<PayrollRecord[]>([]);
   const [notices, setNotices] = useState<Notice[]>([]);
   const [settings, setSettings] = useState<InstitutionSettings>(INITIAL_SETTINGS);
+  const [websiteCmsConfig, setWebsiteCmsConfig] = useState<WebsiteCmsConfig>(() => {
+    try {
+      const cached = window.localStorage.getItem(CMS_LOCAL_CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached) as Partial<WebsiteCmsConfig>;
+        if (parsed && parsed.homepageSections && parsed.pages) {
+          return {
+            ...INITIAL_WEBSITE_CMS_CONFIG,
+            ...parsed,
+            draftNotices: [],
+            recentUpdates: [],
+          };
+        }
+      }
+    } catch {
+      // ignore localStorage parse errors
+    }
+    return INITIAL_WEBSITE_CMS_CONFIG;
+  });
+  const [publicPublishedCmsSnapshot, setPublicPublishedCmsSnapshot] =
+    useState<PublicPublishedCmsSnapshot | null>(null);
+  const [publicCmsLoadStatus, setPublicCmsLoadStatus] = useState<
+    'loading' | 'loaded' | 'empty' | 'error'
+  >('loading');
+  const [publicCmsError, setPublicCmsError] = useState<string | null>(null);
+  const [publicCmsReloadTick, setPublicCmsReloadTick] = useState<number>(0);
+
+  const websiteCmsConfigRef = useRef<WebsiteCmsConfig>(websiteCmsConfig);
+  websiteCmsConfigRef.current = websiteCmsConfig;
+  const noticesRef = useRef<Notice[]>(notices);
+  noticesRef.current = notices;
+  const settingsRef = useRef<InstitutionSettings>(settings);
+  settingsRef.current = settings;
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [bannerSlides, setBannerSlides] = useState<BannerSlide[]>(INITIAL_BANNER_SLIDES);
   const [studyDiary, setStudyDiary] = useState<StudyDiaryEntry[]>([]);
@@ -234,8 +347,101 @@ export function MadrasaPortalApp() {
   const [accountInvitations, setAccountInvitations] = useState<AccountInvitation[]>([]);
   const [superAdminLock, setSuperAdminLock] = useState<SuperAdminBootstrapLock | null>(null);
   const [adminAuditLogs, setAdminAuditLogs] = useState<AdminAuditLog[]>([]);
-  const [isPublicAdmissionMode, setIsPublicAdmissionMode] = useState<boolean>(false);
-  const [pendingInvitationCode, setPendingInvitationCode] = useState<string>('');
+  const [isPublicAdmissionMode, setIsPublicAdmissionMode] = useState<boolean>(() => {
+    try {
+      return window.location.pathname.toLowerCase().startsWith('/admission');
+    } catch {
+      return false;
+    }
+  });
+  const [pendingInvitationCode, setPendingInvitationCode] = useState<string>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return (params.get('activate') || '').trim();
+    } catch {
+      return '';
+    }
+  });
+
+  const navigateToPublicPage = (pagePath: PublicPagePath) => {
+    try {
+      if (window.location.pathname !== pagePath) {
+        window.history.pushState({}, '', pagePath);
+      }
+    } catch {
+      // ignore history errors in sandboxed iframes
+    }
+    setPublicPagePath(pagePath);
+    setShowPublicWebsite(true);
+    setShowLoginGate(false);
+    setIsPublicAdmissionMode(pagePath === '/admission');
+    if (pagePath === '/admission' && !firebaseUser && !currentUserProfile) {
+      setActiveRole('student');
+      setActiveModule('admissions');
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const navigatePublicRoute = (
+    target: 'home' | 'login' | 'admission' | 'portal',
+    invitationCode?: string
+  ) => {
+    if (invitationCode !== undefined) {
+      setPendingInvitationCode(invitationCode);
+    }
+
+    if (target === 'home') {
+      navigateToPublicPage('/');
+      return;
+    }
+    if (target === 'admission') {
+      navigateToPublicPage('/admission');
+      return;
+    }
+
+    try {
+      const nextPath = target === 'login' ? '/login' : '/portal';
+      if (window.location.pathname !== nextPath) {
+        window.history.pushState({}, '', nextPath);
+      }
+    } catch {
+      // ignore history errors in sandboxed iframes
+    }
+
+    if (target === 'login') {
+      setShowPublicWebsite(false);
+      setIsPublicAdmissionMode(false);
+      setShowLoginGate(true);
+    } else {
+      setShowPublicWebsite(false);
+      setIsPublicAdmissionMode(false);
+      setShowLoginGate(!firebaseUser && !currentUserProfile);
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const path = window.location.pathname.toLowerCase();
+      if (path.startsWith('/login')) {
+        setShowPublicWebsite(false);
+        setIsPublicAdmissionMode(false);
+        setShowLoginGate(true);
+      } else if (path.startsWith('/portal')) {
+        setShowPublicWebsite(false);
+        setIsPublicAdmissionMode(false);
+        setShowLoginGate(!firebaseUser && !currentUserProfile);
+      } else {
+        const resolvedPage = resolvePublicPagePathFromPathname(path);
+        setPublicPagePath(resolvedPage);
+        setShowPublicWebsite(true);
+        setShowLoginGate(false);
+        setIsPublicAdmissionMode(resolvedPage === '/admission');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [firebaseUser]);
 
   useEffect(() => {
     try {
@@ -355,6 +561,91 @@ export function MadrasaPortalApp() {
     document.documentElement.lang = language;
     document.documentElement.dir = isRtl ? 'rtl' : 'ltr';
   }, [language, isRtl]);
+
+  const syncPublicCmsSnapshotToFirestore = async (
+    cmsCfg: WebsiteCmsConfig,
+    noticesList: Notice[],
+    settingsObj: InstitutionSettings,
+    authorUid: string
+  ): Promise<PublicPublishedCmsSnapshot> => {
+    const sanitizedSnapshot = buildSanitizedPublicCmsSnapshot(
+      cmsCfg,
+      noticesList,
+      settingsObj
+    );
+    const publicEnvelope = encodePublicCmsAsSettingsEnvelope(
+      sanitizedSnapshot,
+      authorUid
+    );
+    const publicDocRef = doc(db, 'settings', PUBLIC_WEBSITE_CMS_SETTINGS_DOC_ID);
+    const existingPublicSnap = await getExistingDocIfPresent(publicDocRef);
+    const { authorId, ...cleanPublicPayload } = publicEnvelope;
+    if (existingPublicSnap) {
+      await updateDoc(publicDocRef, {
+        ...cleanPublicPayload,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(publicDocRef, {
+        ...cleanPublicPayload,
+        authorId: authorUid,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return sanitizedSnapshot;
+  };
+
+  const handleRetryLoadPublicCms = () => {
+    setPublicCmsReloadTick((prev) => prev + 1);
+  };
+
+  // Unconditional real-time listener for public published CMS document (`settings/website-cms-public`)
+  // Works on fresh devices and browsers without requiring authentication
+  useEffect(() => {
+    setPublicCmsLoadStatus('loading');
+    setPublicCmsError(null);
+
+    const publicDocRef = doc(db, 'settings', PUBLIC_WEBSITE_CMS_SETTINGS_DOC_ID);
+    const unsubPublicCms = onSnapshot(
+      publicDocRef,
+      (snap) => {
+        if (snap.exists()) {
+          const decoded = decodePublicCmsFromSettingsEnvelope(
+            snap.data() as Record<string, unknown>,
+            snap.id
+          );
+          if (decoded) {
+            setPublicPublishedCmsSnapshot(decoded);
+            setPublicCmsLoadStatus('loaded');
+            setPublicCmsError(null);
+            try {
+              const sanitizedForCache = publicSnapshotToWebsiteCmsConfig(decoded);
+              window.localStorage.setItem(
+                CMS_LOCAL_CACHE_KEY,
+                JSON.stringify(sanitizedForCache)
+              );
+            } catch {
+              // ignore storage quota errors
+            }
+            return;
+          }
+        }
+        setPublicPublishedCmsSnapshot(null);
+        setPublicCmsLoadStatus('empty');
+        setPublicCmsError(null);
+      },
+      (err) => {
+        const rawMsg = err instanceof Error ? err.message : String(err);
+        setPublicCmsError(rawMsg);
+        setPublicCmsLoadStatus('error');
+      }
+    );
+
+    return () => {
+      unsubPublicCms();
+    };
+  }, [publicCmsReloadTick]);
 
   // Listen to Firebase Auth state, verify token health, and provision user profile document
   useEffect(() => {
@@ -858,6 +1149,57 @@ export function MadrasaPortalApp() {
       )
     );
 
+    // 11a. Website CMS configuration listener stored in `settings/website-cms-config` (restricted to admins)
+    if (isTrustedAdmin) {
+      unsubscribers.push(
+        onSnapshot(
+          doc(db, 'settings', WEBSITE_CMS_SETTINGS_DOC_ID),
+          async (snap) => {
+            if (snap.exists()) {
+              const decoded = decodeWebsiteCmsFromSettingsEnvelope(
+                snap.data() as Record<string, unknown>
+              );
+              if (decoded) {
+                websiteCmsConfigRef.current = decoded;
+                setWebsiteCmsConfig(decoded);
+                const sanitized = buildSanitizedPublicCmsSnapshot(
+                  decoded,
+                  noticesRef.current,
+                  settingsRef.current
+                );
+                try {
+                  window.localStorage.setItem(
+                    CMS_LOCAL_CACHE_KEY,
+                    JSON.stringify(publicSnapshotToWebsiteCmsConfig(sanitized))
+                  );
+                } catch {
+                  // ignore storage quota errors
+                }
+                // Ensure `settings/website-cms-public` is initialized if not yet present in Firestore
+                try {
+                  const pubRef = doc(db, 'settings', PUBLIC_WEBSITE_CMS_SETTINGS_DOC_ID);
+                  const pubSnap = await getExistingDocIfPresent(pubRef);
+                  if (!pubSnap) {
+                    const synced = await syncPublicCmsSnapshotToFirestore(
+                      decoded,
+                      noticesRef.current,
+                      settingsRef.current,
+                      uid
+                    );
+                    setPublicPublishedCmsSnapshot(synced);
+                    setPublicCmsLoadStatus('loaded');
+                  }
+                } catch {
+                  // Best-effort initial public CMS sync
+                }
+              }
+            }
+          },
+          (err) => reportListenerError(err, OperationType.GET, `settings/${WEBSITE_CMS_SETTINGS_DOC_ID}`)
+        )
+      );
+    }
+
     // 11b. Examination Setup envelopes persisted in `settings` collection
     const examSetupsQuery = query(
       collection(db, 'settings'),
@@ -1251,16 +1593,54 @@ export function MadrasaPortalApp() {
     setAuthError(null);
     const classified = classifyLoginIdentifier(identifier);
 
-    // Do not perform client-side password checks or fake login success for raw Student IDs
-    if (classified.kind !== 'email') {
+    if (classified.kind === 'invalid' || classified.kind === 'username') {
       return {
         ok: false,
-        errorCode: 'USERNAME_REQUIRES_BACKEND_LOOKUP',
+        errorCode: 'auth/invalid-credential',
       };
     }
 
+    let resolvedAuthEmail = classified.normalized;
+
+    // Resolve Student ID (UQCM-2026-101) or Verified Guardian Phone (+8801XXXXXXXXX) via rate-limited backend resolver
+    if (classified.kind === 'student_id' || classified.kind === 'phone') {
+      try {
+        const resp = await fetch('/api/auth/resolve-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            identifier: classified.normalized,
+            loginType: classified.kind,
+          }),
+        });
+        if (resp.status === 429) {
+          return {
+            ok: false,
+            errorCode: 'auth/too-many-requests',
+          };
+        }
+        const data = (await resp.json().catch(() => null)) as {
+          ok?: boolean;
+          authEmail?: string;
+        } | null;
+        if (data?.ok && data.authEmail) {
+          resolvedAuthEmail = data.authEmail;
+        } else {
+          resolvedAuthEmail =
+            classified.kind === 'student_id'
+              ? resolveCanonicalStudentAuthEmail(classified.normalized)
+              : resolveCanonicalGuardianPhoneAuthEmail(classified.normalized);
+        }
+      } catch {
+        resolvedAuthEmail =
+          classified.kind === 'student_id'
+            ? resolveCanonicalStudentAuthEmail(classified.normalized)
+            : resolveCanonicalGuardianPhoneAuthEmail(classified.normalized);
+      }
+    }
+
     try {
-      const cred = await signInWithEmailPassword(classified.normalized, password);
+      const cred = await signInWithEmailPassword(resolvedAuthEmail, password);
       if (isBootstrapSuperAdminEmail(cred.user.email)) {
         setActiveRole('super_admin');
         setActiveModule('dashboard');
@@ -1270,6 +1650,13 @@ export function MadrasaPortalApp() {
       const userSnap = await getDoc(doc(db, 'users', cred.user.uid));
       if (userSnap.exists()) {
         const prof = userSnap.data() as UserProfile;
+        if (prof.status === 'suspended') {
+          await signOutUser().catch(() => {});
+          return { ok: true, status: 'suspended' };
+        }
+        if (prof.status === 'pending') {
+          return { ok: true, status: 'pending' };
+        }
         const redirectInfo = resolvePostLoginRedirect(prof);
         if (redirectInfo.screen === 'portal') {
           setActiveRole(prof.role);
@@ -1282,6 +1669,13 @@ export function MadrasaPortalApp() {
       return { ok: true, status: 'pending' };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Anti-enumeration: never reveal whether a Student ID or Phone exists when credentials fail
+      if (classified.kind === 'student_id' || classified.kind === 'phone') {
+        if (msg.toLowerCase().includes('too-many-requests')) {
+          return { ok: false, errorCode: 'auth/too-many-requests' };
+        }
+        return { ok: false, errorCode: 'auth/invalid-credential' };
+      }
       return { ok: false, errorCode: msg };
     }
   };
@@ -2298,10 +2692,247 @@ export function MadrasaPortalApp() {
       }
     }
 
-    setNotices((prev) => [
-      { ...notice, id, authorId: uid, isDemoRecord: !firebaseUser },
-      ...prev.filter((n) => n.id !== id),
-    ]);
+    const createdNotice: Notice = {
+      ...notice,
+      id,
+      authorId: uid,
+      isDemoRecord: !firebaseUser,
+    };
+    const nextNotices = [
+      createdNotice,
+      ...noticesRef.current.filter((n) => n.id !== id),
+    ];
+    noticesRef.current = nextNotices;
+    setNotices(nextNotices);
+
+    if (firebaseUser && canManageWebsiteCms(activeRole)) {
+      try {
+        const synced = await syncPublicCmsSnapshotToFirestore(
+          websiteCmsConfigRef.current,
+          nextNotices,
+          settingsRef.current,
+          uid
+        );
+        setPublicPublishedCmsSnapshot(synced);
+        setPublicCmsLoadStatus('loaded');
+      } catch {
+        // Public snapshot will also sync on next CMS save
+      }
+    }
+
+    return true;
+  };
+
+  const handleUpdateNotice = async (
+    noticeId: string,
+    updates: Partial<Notice>
+  ): Promise<boolean> => {
+    if (!canManageWebsiteCms(activeRole)) {
+      setOperationError('শুধুমাত্র সুপার অ্যাডমিন ও মুহতামিম নোটিশ সম্পাদনা করতে পারবেন।');
+      return false;
+    }
+    const existing = noticesRef.current.find((n) => n.id === noticeId);
+    if (!existing) return false;
+    setOperationError(null);
+
+    const uid = firebaseUser?.uid || existing.authorId || 'sandbox-user';
+    const merged: Notice = {
+      ...existing,
+      ...updates,
+      id: noticeId,
+    };
+
+    if (firebaseUser) {
+      const noticeRef = doc(db, 'notices', noticeId);
+      try {
+        const snap = await getExistingDocIfPresent(noticeRef);
+        const noticePayload = {
+          titleBn: merged.titleBn,
+          titleEn: merged.titleEn || merged.titleBn,
+          contentBn: merged.contentBn,
+          targetAudience: merged.targetAudience,
+          targetClass: merged.targetClass,
+          publishDate: merged.publishDate,
+          priority: merged.priority,
+        };
+        if (snap) {
+          await updateDoc(noticeRef, {
+            ...noticePayload,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(noticeRef, {
+            ...noticePayload,
+            authorId: uid,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        reportDatabaseError(
+          err,
+          OperationType.UPDATE,
+          `notices/${noticeId}`,
+          'নোটিশ হালনাগাদ ব্যর্থ হয়েছে'
+        );
+        return false;
+      }
+    }
+
+    const nextNotices = noticesRef.current.map((n) =>
+      n.id === noticeId ? merged : n
+    );
+    noticesRef.current = nextNotices;
+    setNotices(nextNotices);
+
+    if (firebaseUser && canManageWebsiteCms(activeRole)) {
+      try {
+        const synced = await syncPublicCmsSnapshotToFirestore(
+          websiteCmsConfigRef.current,
+          nextNotices,
+          settingsRef.current,
+          uid
+        );
+        setPublicPublishedCmsSnapshot(synced);
+        setPublicCmsLoadStatus('loaded');
+      } catch {
+        // Best-effort sync
+      }
+    }
+
+    return true;
+  };
+
+  const handleDeleteNotice = async (noticeId: string): Promise<boolean> => {
+    if (!canManageWebsiteCms(activeRole)) {
+      setOperationError('শুধুমাত্র সুপার অ্যাডমিন ও মুহতামিম নোটিশ মুছে ফেলতে পারবেন।');
+      return false;
+    }
+    setOperationError(null);
+
+    if (firebaseUser) {
+      try {
+        const noticeRef = doc(db, 'notices', noticeId);
+        const snap = await getExistingDocIfPresent(noticeRef);
+        if (snap) {
+          await deleteDoc(noticeRef);
+        }
+      } catch (err) {
+        reportDatabaseError(
+          err,
+          OperationType.DELETE,
+          `notices/${noticeId}`,
+          'নোটিশ মুছে ফেলা যায়নি'
+        );
+        return false;
+      }
+    }
+
+    const nextNotices = noticesRef.current.filter((n) => n.id !== noticeId);
+    noticesRef.current = nextNotices;
+    setNotices(nextNotices);
+
+    if (firebaseUser && canManageWebsiteCms(activeRole)) {
+      try {
+        const synced = await syncPublicCmsSnapshotToFirestore(
+          websiteCmsConfigRef.current,
+          nextNotices,
+          settingsRef.current,
+          firebaseUser.uid
+        );
+        setPublicPublishedCmsSnapshot(synced);
+        setPublicCmsLoadStatus('loaded');
+      } catch {
+        // Best-effort sync
+      }
+    }
+
+    return true;
+  };
+
+  const handleSaveWebsiteCmsConfig = async (
+    nextConfig: WebsiteCmsConfig,
+    summaryBn: string
+  ): Promise<boolean> => {
+    if (!canManageWebsiteCms(activeRole)) {
+      setOperationSuccess(null);
+      setOperationError('শুধুমাত্র সুপার অ্যাডমিন ও মুহতামিম ওয়েবসাইট সিএমএস পরিচালনা করতে পারবেন।');
+      return false;
+    }
+    if (!firebaseUser) {
+      setOperationSuccess(null);
+      setOperationError(
+        'ফায়ারবেস অথেনটিকেশন সেশন সক্রিয় নেই। ওয়েবসাইট সিএমএস পরিবর্তন ক্লাউডে প্রকাশ করতে সুপার অ্যাডমিন বা মুহতামিম হিসেবে লগইন করুন।'
+      );
+      return false;
+    }
+
+    setOperationError(null);
+    const uid = firebaseUser.uid;
+    const envelope = encodeWebsiteCmsAsSettingsEnvelope(nextConfig, uid);
+    const cmsDocRef = doc(db, 'settings', WEBSITE_CMS_SETTINGS_DOC_ID);
+
+    try {
+      const snap = await getExistingDocIfPresent(cmsDocRef);
+      const { authorId, ...cleanPayload } = envelope;
+      if (snap) {
+        await updateDoc(cmsDocRef, {
+          ...cleanPayload,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        await setDoc(cmsDocRef, {
+          ...cleanPayload,
+          authorId: uid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch (err) {
+      reportDatabaseError(
+        err,
+        OperationType.WRITE,
+        `settings/${WEBSITE_CMS_SETTINGS_DOC_ID}`,
+        'ওয়েবসাইট সিএমএস কনফিগারেশন সংরক্ষণ ব্যর্থ হয়েছে'
+      );
+      return false;
+    }
+
+    let sanitizedSnapshot: PublicPublishedCmsSnapshot;
+    try {
+      sanitizedSnapshot = await syncPublicCmsSnapshotToFirestore(
+        nextConfig,
+        noticesRef.current,
+        settingsRef.current,
+        uid
+      );
+    } catch (err) {
+      reportDatabaseError(
+        err,
+        OperationType.WRITE,
+        `settings/${PUBLIC_WEBSITE_CMS_SETTINGS_DOC_ID}`,
+        'পাবলিক ওয়েবসাইট সিএমএস স্ন্যাপশট প্রকাশ ব্যর্থ হয়েছে'
+      );
+      return false;
+    }
+
+    websiteCmsConfigRef.current = nextConfig;
+    setWebsiteCmsConfig(nextConfig);
+    setPublicPublishedCmsSnapshot(sanitizedSnapshot);
+    setPublicCmsLoadStatus('loaded');
+    setPublicCmsError(null);
+
+    try {
+      // Cache ONLY sanitized public content in localStorage — never private drafts
+      window.localStorage.setItem(
+        CMS_LOCAL_CACHE_KEY,
+        JSON.stringify(publicSnapshotToWebsiteCmsConfig(sanitizedSnapshot))
+      );
+    } catch {
+      // ignore storage quota errors
+    }
+
+    setOperationSuccess(summaryBn);
     return true;
   };
 
@@ -2323,18 +2954,18 @@ export function MadrasaPortalApp() {
 
     setOperationError(null);
     let mergedSettings: InstitutionSettings = {
-      ...settings,
+      ...settingsRef.current,
       ...updated,
     };
 
     if (firebaseUser) {
-      const settingsDocId = updated.id || settings.id || 'default-settings';
-      const settingsRef = doc(db, 'settings', settingsDocId);
+      const settingsDocId = updated.id || settingsRef.current.id || 'default-settings';
+      const settingsRefDoc = doc(db, 'settings', settingsDocId);
       try {
-        const snap = await getExistingDocIfPresent(settingsRef);
+        const snap = await getExistingDocIfPresent(settingsRefDoc);
         const existingData = snap
           ? (snap.data() as Partial<InstitutionSettings>)
-          : settings;
+          : settingsRef.current;
         const completePayload = buildCompleteInstitutionSettingsPayload(
           updated,
           existingData,
@@ -2343,12 +2974,12 @@ export function MadrasaPortalApp() {
 
         if (snap) {
           // Preserve immutable createdAt and authorId while saving all required schema fields
-          await updateDoc(settingsRef, {
+          await updateDoc(settingsRefDoc, {
             ...completePayload,
             updatedAt: serverTimestamp(),
           });
         } else {
-          await setDoc(settingsRef, {
+          await setDoc(settingsRefDoc, {
             ...completePayload,
             authorId: firebaseUser.uid,
             createdAt: serverTimestamp(),
@@ -2374,17 +3005,34 @@ export function MadrasaPortalApp() {
     } else {
       const completePayload = buildCompleteInstitutionSettingsPayload(
         updated,
-        settings,
+        settingsRef.current,
         INITIAL_SETTINGS
       );
       mergedSettings = {
-        ...settings,
+        ...settingsRef.current,
         ...completePayload,
-        id: updated.id || settings.id || 'default-settings',
+        id: updated.id || settingsRef.current.id || 'default-settings',
       };
     }
 
+    settingsRef.current = mergedSettings;
     setSettings(mergedSettings);
+
+    if (firebaseUser && canManageWebsiteCms(activeRole)) {
+      try {
+        const synced = await syncPublicCmsSnapshotToFirestore(
+          websiteCmsConfigRef.current,
+          noticesRef.current,
+          mergedSettings,
+          firebaseUser.uid
+        );
+        setPublicPublishedCmsSnapshot(synced);
+        setPublicCmsLoadStatus('loaded');
+      } catch {
+        // Best-effort sync
+      }
+    }
+
     return true;
   };
 
@@ -2838,9 +3486,37 @@ export function MadrasaPortalApp() {
 
     const uid = firebaseUser?.uid || 'usr-muhtamim-1';
     const todayIso = new Date().toISOString().slice(0, 10);
+    const normalizedGuardianPhone = normalizeBangladeshPhone(application.guardianPhone);
+    const resolvedVerMethod = resolveGuardianVerificationMethod({
+      guardianPhone: normalizedGuardianPhone,
+      guardianEmail: application.guardianEmail,
+      guardianVerificationMethod: application.guardianVerificationMethod,
+    });
+
+    // Deduplicate guardian accounts across multiple children
+    const existingGuardian = findExistingGuardianUser(
+      users,
+      normalizedGuardianPhone,
+      application.guardianEmail
+    );
+    const resolvedGuardianUid =
+      application.guardianUid || existingGuardian?.uid || existingGuardian?.id || '';
+    const isExistingGuardianActive = existingGuardian?.status === 'active';
 
     const updatedApp: AdmissionApplication = {
       ...application,
+      guardianPhone: normalizedGuardianPhone || application.guardianPhone,
+      guardianUid: resolvedGuardianUid,
+      guardianVerificationMethod: resolvedVerMethod,
+      guardianVerificationStatus: isExistingGuardianActive
+        ? 'verified'
+        : application.guardianVerificationStatus === 'verified'
+          ? 'verified'
+          : 'pending_verification',
+      guardianAccountStatus: isExistingGuardianActive
+        ? 'activated'
+        : 'pending_verification',
+      studentAccountStatus: 'pending_activation',
       department: assignment.department,
       requestedClass: assignment.requestedClass,
       assignedAdmissionNo: assignment.assignedAdmissionNo,
@@ -2867,6 +3543,10 @@ export function MadrasaPortalApp() {
         authorId: uid,
       }
     );
+
+    if (resolvedGuardianUid && !provisioned.studentRecord.guardianUid) {
+      provisioned.studentRecord.guardianUid = resolvedGuardianUid;
+    }
 
     // Idempotent single-use account invitations for Student and Guardian (separate tokens, never shared)
     const invPkg = buildAccountProvisioningPackage(
@@ -3517,11 +4197,156 @@ export function MadrasaPortalApp() {
     return true;
   };
 
+  const handleResendOrRecoverInvitation = async (
+    applicationOrId: AdmissionApplication | string,
+    targetRole: 'guardian' | 'student'
+  ): Promise<{ ok: boolean; messageBn: string; newCode?: string }> => {
+    if (!canApproveAdmissions(activeRole)) {
+      const msg =
+        'শুধুমাত্র সুপার অ্যাডমিন ও মুহতামিম ভেরিফিকেশন বা অ্যাক্টিভেশন কোড পুনঃইস্যু করতে পারবেন।';
+      setOperationError(msg);
+      return { ok: false, messageBn: msg };
+    }
+
+    const applicationId =
+      typeof applicationOrId === 'string' ? applicationOrId : applicationOrId.id;
+    const app =
+      typeof applicationOrId === 'object' && applicationOrId !== null
+        ? applicationOrId
+        : admissionApplications.find((a) => a.id === applicationId);
+    if (!app || app.status !== 'approved') {
+      const msg = 'অনুমোদিত ভর্তি আবেদন খুঁজে পাওয়া যায়নি।';
+      setOperationError(msg);
+      return { ok: false, messageBn: msg };
+    }
+
+    const stu = students.find(
+      (s) => s.id === app.assignedStudentId || s.admissionNo === app.assignedAdmissionNo
+    );
+    if (!stu) {
+      const msg = 'সংশ্লিষ্ট শিক্ষার্থীর রেকর্ড খুঁজে পাওয়া যায়নি।';
+      setOperationError(msg);
+      return { ok: false, messageBn: msg };
+    }
+
+    const uid = firebaseUser?.uid || 'usr-muhtamim-1';
+    const nowIso = new Date().toISOString();
+    const expiresIso = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    const cleanStuToken = stu.admissionNo.replace(/[^A-Z0-9]/gi, '').toUpperCase().slice(-7);
+    const suffix = String(Date.now()).slice(-3);
+
+    const invId = `inv-${targetRole === 'student' ? 'stu' : 'grd'}-${stu.id}`;
+    const newCode =
+      targetRole === 'student'
+        ? `ACT-STU-${cleanStuToken}-${suffix}`
+        : `ACT-GRD-${cleanStuToken}-${suffix}`;
+
+    const verMethod = resolveGuardianVerificationMethod(app);
+    const reissuedInv: AccountInvitation = {
+      id: invId,
+      invitationCode: newCode,
+      targetRole,
+      applicationId: app.id,
+      studentId: stu.id,
+      admissionNo: stu.admissionNo,
+      recipientName: targetRole === 'student' ? stu.nameBn : app.guardianName,
+      recipientPhone: normalizeBangladeshPhone(app.guardianPhone) || app.guardianPhone,
+      recipientEmail:
+        targetRole === 'student'
+          ? resolveCanonicalStudentAuthEmail(stu.admissionNo)
+          : app.guardianEmail || resolveCanonicalGuardianPhoneAuthEmail(app.guardianPhone),
+      status: 'pending_activation',
+      verificationMethod: verMethod,
+      verificationStatus:
+        targetRole === 'guardian' ? 'pending_verification' : app.guardianVerificationStatus || 'verified',
+      issuedAt: nowIso,
+      expiresAt: expiresIso,
+      redeemedByUid: '',
+      redeemedAt: '',
+      issuedByUid: uid,
+      authorId: uid,
+    };
+
+    const updatedApp: AdmissionApplication = {
+      ...app,
+      ...(targetRole === 'student'
+        ? {
+            studentInvitationCode: newCode,
+            studentAccountStatus: 'pending_activation',
+          }
+        : {
+            guardianInvitationCode: newCode,
+            guardianVerificationStatus: 'pending_verification',
+            guardianAccountStatus: 'pending_verification',
+          }),
+    };
+
+    if (firebaseUser) {
+      try {
+        const invRef = doc(db, 'accountInvitations', invId);
+        const { id, isDemoRecord, createdAt, updatedAt, ...invPayload } = reissuedInv;
+        const snap = await getExistingDocIfPresent(invRef);
+        if (snap) {
+          await updateDoc(invRef, {
+            ...invPayload,
+            updatedAt: serverTimestamp(),
+          });
+        } else {
+          await setDoc(invRef, {
+            ...invPayload,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        const appRef = doc(db, 'admissionApplications', app.id);
+        const { id: aId, isDemoRecord: aDemo, createdAt: aCr, updatedAt: aUp, ...appPayload } =
+          updatedApp;
+        const appSnap = await getExistingDocIfPresent(appRef);
+        if (appSnap) {
+          await updateDoc(appRef, {
+            ...appPayload,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      } catch (err) {
+        reportDatabaseError(
+          err,
+          OperationType.UPDATE,
+          `accountInvitations/${invId}`,
+          'অ্যাক্টিভেশন বা ভেরিফিকেশন কোড পুনঃইস্যু ব্যর্থ হয়েছে'
+        );
+        return {
+          ok: false,
+          messageBn: 'ডাটাবেসে নতুন কোড সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।',
+        };
+      }
+    }
+
+    setAccountInvitations((prev) => [
+      reissuedInv,
+      ...prev.filter((i) => i.id !== invId),
+    ]);
+    setAdmissionApplications((prev) =>
+      prev.map((a) => (a.id === app.id ? updatedApp : a))
+    );
+
+    const msgBn =
+      targetRole === 'guardian'
+        ? `অভিভাবক ভেরিফিকেশন ও নতুন অ্যাক্টিভেশন কোড (${newCode}) সফলভাবে পুনঃইস্যু করা হয়েছে।`
+        : `শিক্ষার্থী (${stu.admissionNo})-এর নতুন রিকভারি অ্যাক্টিভেশন কোড (${newCode}) ইস্যু করা হয়েছে।`;
+    setOperationSuccess(msgBn);
+    return { ok: true, messageBn: msgBn, newCode };
+  };
+
   const handleActivateAccountInvitation = async (payload: {
     invitationCode: string;
     verificationSecret: string;
     email: string;
     newPassword: string;
+    confirmPassword?: string;
+    guardianVerificationMethod?: GuardianVerificationMethod;
+    guardianContactVerified?: boolean;
   }): Promise<{
     ok: boolean;
     messageBn: string;
@@ -3530,10 +4355,53 @@ export function MadrasaPortalApp() {
     targetRole?: InvitationTargetRole;
     studentId?: string;
   }> => {
+    const cleanCode = payload.invitationCode.trim().toUpperCase();
+    const candidateInv = accountInvitations.find(
+      (i) => i.invitationCode.trim().toUpperCase() === cleanCode
+    );
+
+    // If activating a student account, verify that admission is approved and guardian is verified
+    if (candidateInv && candidateInv.targetRole === 'student') {
+      const parentApp = admissionApplications.find(
+        (a) =>
+          a.id === candidateInv.applicationId ||
+          a.assignedStudentId === candidateInv.studentId ||
+          a.assignedAdmissionNo === candidateInv.admissionNo
+      );
+      const guardianInv = accountInvitations.find(
+        (i) =>
+          i.applicationId === candidateInv.applicationId &&
+          i.targetRole === 'guardian'
+      );
+      const isGuardianAlreadyVerified = Boolean(
+        !parentApp?.requestGuardianAccount ||
+          parentApp?.guardianVerificationStatus === 'verified' ||
+          parentApp?.guardianAccountStatus === 'activated' ||
+          guardianInv?.status === 'activated' ||
+          guardianInv?.verificationStatus === 'verified'
+      );
+
+      if (parentApp) {
+        const prereq = canActivateStudentAccount(parentApp, isGuardianAlreadyVerified);
+        if (!prereq.allowed) {
+          return {
+            ok: false,
+            messageBn:
+              prereq.reasonBn ||
+              'শিক্ষার্থী অ্যাকাউন্ট সক্রিয় করার পূর্বে অভিভাবকের অ্যাকাউন্ট ভেরিফিকেশন সম্পন্ন হওয়া আবশ্যক।',
+            messageEn:
+              prereq.reasonEn ||
+              'Guardian verification must be completed before student account activation.',
+          };
+        }
+      }
+    }
+
     const check = validateAndRedeemActivationInvitation(accountInvitations, {
       invitationCode: payload.invitationCode,
       verificationPhoneOrAdmissionNo: payload.verificationSecret,
       chosenPassword: payload.newPassword,
+      confirmPassword: payload.confirmPassword,
       redeemerUid: firebaseUser?.uid || '',
     });
 
@@ -3558,26 +4426,55 @@ export function MadrasaPortalApp() {
         messageEn: 'Invalid email address format.',
       };
     }
-    const normalizedEmail =
-      rawEmail ||
-      redeemed.recipientEmail ||
-      `${redeemed.targetRole}.${redeemed.admissionNo
-        .toLowerCase()
-        .replace(/[^a-z0-9]/g, '')}@ummulquranmadrasa.edu.bd`;
 
-    const isStaffOrAdminRole = ['muhtamim', 'teacher', 'accountant', 'residential_supervisor', 'staff'].includes(
-      redeemed.targetRole
-    );
+    // Canonical auth email resolution so Student ID + Password and Guardian Phone + Password work seamlessly
+    const normalizedEmail =
+      redeemed.targetRole === 'student'
+        ? resolveCanonicalStudentAuthEmail(redeemed.admissionNo)
+        : rawEmail ||
+          (redeemed.recipientEmail && redeemed.recipientEmail.includes('@')
+            ? redeemed.recipientEmail.trim().toLowerCase()
+            : redeemed.recipientPhone
+              ? resolveCanonicalGuardianPhoneAuthEmail(redeemed.recipientPhone)
+              : `${redeemed.targetRole}.${redeemed.admissionNo
+                  .toLowerCase()
+                  .replace(/[^a-z0-9]/g, '')}@ummulquranmadrasa.edu.bd`);
+
+    const isStaffOrAdminRole = [
+      'muhtamim',
+      'teacher',
+      'accountant',
+      'residential_supervisor',
+      'staff',
+    ].includes(redeemed.targetRole);
+
+    // Deduplicate guardian identity across multiple children
+    const existingGuardianUser =
+      redeemed.targetRole === 'guardian'
+        ? findExistingGuardianUser(users, redeemed.recipientPhone, normalizedEmail)
+        : undefined;
 
     let activatedUid =
-      redeemed.targetRole === 'student'
+      existingGuardianUser?.uid ||
+      existingGuardianUser?.id ||
+      (redeemed.targetRole === 'student'
         ? 'demo-student-1'
         : redeemed.targetRole === 'guardian'
           ? 'demo-guardian-1'
           : redeemed.targetRole === 'muhtamim'
             ? 'usr-muhtamim-1'
-            : redeemed.staffId || `usr-${redeemed.targetRole}-${Date.now()}`;
+            : redeemed.staffId || `usr-${redeemed.targetRole}-${Date.now()}`);
     let backendNoticeBn: string | undefined = undefined;
+
+    const mergedGuardianStudentIds =
+      redeemed.targetRole === 'guardian'
+        ? mergeLinkedStudentIds(
+            existingGuardianUser?.linkedStudentIds || '',
+            redeemed.studentId
+          )
+        : isStaffOrAdminRole
+          ? ''
+          : redeemed.studentId;
 
     // Attempt real Firebase Authentication provisioning (never store plaintext password anywhere)
     try {
@@ -3593,15 +4490,45 @@ export function MadrasaPortalApp() {
         displayName: redeemed.recipientName,
         role: redeemed.targetRole,
         status: 'active',
-        linkedStudentIds: isStaffOrAdminRole ? '' : redeemed.studentId,
-        assignedClasses: redeemed.assignedClasses || (redeemed.targetRole === 'muhtamim' ? 'সকল জামাত' : ''),
-        phone: redeemed.recipientPhone || '',
+        linkedStudentIds: mergedGuardianStudentIds,
+        assignedClasses:
+          redeemed.assignedClasses ||
+          (redeemed.targetRole === 'muhtamim' ? 'সকল জামাত' : ''),
+        phone: normalizeBangladeshPhone(redeemed.recipientPhone) || redeemed.recipientPhone || '',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
       const rawErr = err instanceof Error ? err.message : String(err);
-      if (rawErr.toLowerCase().includes('operation-not-allowed')) {
+      if (rawErr.toLowerCase().includes('email-already-in-use')) {
+        // Existing guardian or user account — sign in and link the additional student record
+        try {
+          const signInCred = await signInWithEmailPassword(
+            normalizedEmail,
+            payload.newPassword
+          );
+          activatedUid = signInCred.user.uid;
+          const userRef = doc(db, 'users', activatedUid);
+          const existingSnap = await getExistingDocIfPresent(userRef);
+          if (existingSnap) {
+            const existingData = existingSnap.data() as UserProfile;
+            await updateDoc(userRef, {
+              status: 'active',
+              linkedStudentIds:
+                redeemed.targetRole === 'guardian'
+                  ? mergeLinkedStudentIds(
+                      existingData.linkedStudentIds || '',
+                      redeemed.studentId
+                    )
+                  : existingData.linkedStudentIds || redeemed.studentId,
+              updatedAt: serverTimestamp(),
+            });
+          }
+        } catch {
+          backendNoticeBn =
+            'বিদ্যমান অভিভাবক অ্যাকাউন্টের সাথে নতুন শিক্ষার্থী সংযুক্ত করা হয়েছে।';
+        }
+      } else if (rawErr.toLowerCase().includes('operation-not-allowed')) {
         backendNoticeBn =
           'নোট: Firebase Console-এ Email/Password Sign-In প্রোভাইডার এখনও সক্রিয় করা হয়নি (auth/operation-not-allowed)। তবে এককালীন কোড যাচাই ও অনুমোদিত প্রোফাইল সংযুক্তি সম্পন্ন হয়েছে।';
       } else {
@@ -3613,6 +4540,8 @@ export function MadrasaPortalApp() {
       ...redeemed,
       recipientEmail: normalizedEmail,
       redeemedByUid: activatedUid,
+      verificationStatus: 'verified',
+      verifiedAt: redeemed.redeemedAt,
     };
 
     if (auth.currentUser) {
@@ -3622,10 +4551,47 @@ export function MadrasaPortalApp() {
         if (existingInvSnap) {
           await updateDoc(invRef, {
             status: 'activated',
+            verificationStatus: 'verified',
+            verifiedAt: finalRedeemed.redeemedAt,
             redeemedByUid: activatedUid,
             redeemedAt: finalRedeemed.redeemedAt,
             updatedAt: serverTimestamp(),
           });
+        }
+
+        // Persist linked studentUid or guardianUid on the canonical student document
+        if (!isStaffOrAdminRole && finalRedeemed.studentId) {
+          const stuRef = doc(db, 'students', finalRedeemed.studentId);
+          const stuSnap = await getExistingDocIfPresent(stuRef);
+          if (stuSnap) {
+            await updateDoc(stuRef, {
+              ...(finalRedeemed.targetRole === 'student'
+                ? { studentUid: activatedUid }
+                : { guardianUid: activatedUid }),
+              updatedAt: serverTimestamp(),
+            });
+          }
+        }
+
+        // Persist updated verification/activation status on the admission application
+        if (finalRedeemed.applicationId) {
+          const appRef = doc(db, 'admissionApplications', finalRedeemed.applicationId);
+          const appSnap = await getExistingDocIfPresent(appRef);
+          if (appSnap) {
+            await updateDoc(appRef, {
+              ...(finalRedeemed.targetRole === 'guardian'
+                ? {
+                    guardianUid: activatedUid,
+                    guardianVerificationStatus: 'verified',
+                    guardianAccountStatus: 'activated',
+                  }
+                : {
+                    applicantUid: activatedUid,
+                    studentAccountStatus: 'activated',
+                  }),
+              updatedAt: serverTimestamp(),
+            });
+          }
         }
       } catch {
         // Non-fatal if redeemed in sandbox mode without cloud invitation document
@@ -3636,6 +4602,27 @@ export function MadrasaPortalApp() {
     setAccountInvitations((prev) =>
       prev.map((inv) => (inv.id === finalRedeemed.id ? finalRedeemed : inv))
     );
+
+    // Update local admissionApplications state with verified/activated lifecycle status
+    if (finalRedeemed.applicationId) {
+      setAdmissionApplications((prev) =>
+        prev.map((app) => {
+          if (app.id !== finalRedeemed.applicationId) return app;
+          return finalRedeemed.targetRole === 'guardian'
+            ? {
+                ...app,
+                guardianUid: activatedUid,
+                guardianVerificationStatus: 'verified',
+                guardianAccountStatus: 'activated',
+              }
+            : {
+                ...app,
+                applicantUid: activatedUid,
+                studentAccountStatus: 'activated',
+              };
+        })
+      );
+    }
 
     if (!isStaffOrAdminRole) {
       // Link canonical student record for student or guardian activation
@@ -3656,11 +4643,14 @@ export function MadrasaPortalApp() {
       displayName: finalRedeemed.recipientName,
       role: finalRedeemed.targetRole,
       status: 'active',
-      linkedStudentIds: isStaffOrAdminRole ? '' : finalRedeemed.studentId,
+      linkedStudentIds: mergedGuardianStudentIds,
       assignedClasses:
         finalRedeemed.assignedClasses ||
         (finalRedeemed.targetRole === 'muhtamim' ? 'সকল জামাত' : ''),
-      phone: finalRedeemed.recipientPhone || '',
+      phone:
+        normalizeBangladeshPhone(finalRedeemed.recipientPhone) ||
+        finalRedeemed.recipientPhone ||
+        '',
       isDemoRecord: false,
     };
 
@@ -3695,7 +4685,10 @@ export function MadrasaPortalApp() {
                     : finalRedeemed.studentId,
               assignedClasses:
                 finalRedeemed.assignedClasses || u.assignedClasses || '',
-              phone: finalRedeemed.recipientPhone || u.phone,
+              phone:
+                normalizeBangladeshPhone(finalRedeemed.recipientPhone) ||
+                finalRedeemed.recipientPhone ||
+                u.phone,
               isDemoRecord: false,
             };
           }
@@ -3926,6 +4919,70 @@ export function MadrasaPortalApp() {
     }
   };
 
+  const effectivePublicCmsConfig: WebsiteCmsConfig = publicPublishedCmsSnapshot
+    ? publicSnapshotToWebsiteCmsConfig(publicPublishedCmsSnapshot)
+    : websiteCmsConfig;
+
+  const effectivePublicNotices: Notice[] = publicPublishedCmsSnapshot
+    ? publicPublishedCmsSnapshot.publishedNotices
+    : notices;
+
+  if (showPublicWebsite) {
+    if (publicPagePath !== '/') {
+      return (
+        <PublicPages
+          activePath={publicPagePath}
+          language={language}
+          onLanguageChange={setLanguage}
+          settings={settings}
+          notices={effectivePublicNotices}
+          bannerSlides={bannerSlides}
+          examSetups={examSetups}
+          cmsConfig={effectivePublicCmsConfig}
+          cmsLoadStatus={publicCmsLoadStatus}
+          cmsLoadError={publicCmsError}
+          onRetryLoadCms={handleRetryLoadPublicCms}
+          staff={staff}
+          isAuthenticated={Boolean(firebaseUser || currentUserProfile)}
+          onNavigatePage={navigateToPublicPage}
+          onOpenLoginPortal={(invitationCode) => navigatePublicRoute('login', invitationCode)}
+          onEnterManagementPortal={() => navigatePublicRoute('portal')}
+          applications={admissionApplications}
+          students={students}
+          guardianLinkRequests={guardianLinkRequests}
+          accountInvitations={accountInvitations}
+          onSubmitApplication={handleSubmitAdmissionApplication}
+          onUpdateApplication={handleUpdateAdmissionApplication}
+          onApproveApplication={handleApproveAdmissionApplication}
+          onReviewGuardianLinkRequest={handleReviewGuardianLinkRequest}
+          onResendOrRecoverInvitation={async (app, role) => {
+            await handleResendOrRecoverInvitation(app, role);
+          }}
+        />
+      );
+    }
+
+    return (
+      <PublicHomePage
+        language={language}
+        onLanguageChange={setLanguage}
+        settings={settings}
+        notices={effectivePublicNotices}
+        bannerSlides={bannerSlides}
+        examSetups={examSetups}
+        cmsConfig={effectivePublicCmsConfig}
+        cmsLoadStatus={publicCmsLoadStatus}
+        cmsLoadError={publicCmsError}
+        onRetryLoadCms={handleRetryLoadPublicCms}
+        isAuthenticated={Boolean(firebaseUser || currentUserProfile)}
+        onOpenLoginPortal={() => navigatePublicRoute('login')}
+        onOpenOnlineAdmission={() => navigateToPublicPage('/admission')}
+        onEnterManagementPortal={() => navigatePublicRoute('portal')}
+        onNavigatePage={navigateToPublicPage}
+      />
+    );
+  }
+
   if (showLoginGate) {
     return (
       <LoginScreen
@@ -3935,12 +4992,7 @@ export function MadrasaPortalApp() {
         onEmailPasswordLogin={handleEmailPasswordLogin}
         onRegisterAccount={handleRegisterAccount}
         onForgotPassword={handleForgotPassword}
-        onOpenOnlineAdmission={() => {
-          setIsPublicAdmissionMode(true);
-          setActiveRole('student');
-          setActiveModule('admissions');
-          setShowLoginGate(false);
-        }}
+        onOpenOnlineAdmission={() => navigatePublicRoute('admission')}
         onActivateInvitation={handleActivateAccountInvitation}
         onBootstrapSuperAdmin={handleBootstrapSuperAdmin}
         isSuperAdminProvisioned={isSuperAdminProvisioned}
@@ -3949,6 +5001,7 @@ export function MadrasaPortalApp() {
         authError={authError}
         currentAccountStatus={firebaseUser ? currentUserProfile?.status ?? null : null}
         onSignOut={signOutUser}
+        onBackToWebsite={() => navigatePublicRoute('home')}
       />
     );
   }
@@ -3968,29 +5021,45 @@ export function MadrasaPortalApp() {
                 <div className="text-sm sm:text-base font-bold text-white truncate">
                   {language === 'bn'
                     ? 'উম্মুল কুরআন ক্যাডেট মাদ্রাসা — অনলাইন ভর্তি পোর্টাল'
+                    : language === 'ar'
+                    ? 'مدرسة أم القرآن كاديت — بوابة القبول الإلكتروني'
                     : 'Ummul Quran Cadet Madrasa — Online Admission Portal'}
                 </div>
                 <div className="text-[11px] text-emerald-200 truncate">
                   {language === 'bn'
                     ? 'অ্যাকাউন্ট বা লগইন ছাড়াই নতুন ভর্তি আবেদন ও স্ট্যাটাস অনুসন্ধান'
+                    : language === 'ar'
+                    ? 'تقديم طلب قبول جديد أو متابعة حالة الطلب دون تسجيل دخول'
                     : 'Submit a new admission application or track status without logging in'}
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2">
               <LanguageSwitcher language={language} onChange={setLanguage} variant="menu" />
               <button
                 type="button"
+                data-testid="public-admission-back-to-website"
+                onClick={() => navigatePublicRoute('home')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-900/80 hover:bg-emerald-800 text-emerald-100 border border-emerald-700 text-xs font-bold transition-colors cursor-pointer"
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">
+                  {language === 'bn' ? 'হোমপেজ' : language === 'ar' ? 'الرئيسية' : 'Website'}
+                </span>
+              </button>
+              <button
+                type="button"
                 data-testid="public-header-back-to-login"
-                onClick={() => {
-                  setIsPublicAdmissionMode(false);
-                  setShowLoginGate(true);
-                }}
+                onClick={() => navigatePublicRoute('login')}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold shadow-xs transition-colors cursor-pointer"
               >
                 <LogIn className="w-3.5 h-3.5" />
                 <span>
-                  {language === 'bn' ? 'লগইন / অ্যাকাউন্ট সক্রিয়করণ' : 'Login / Activate Account'}
+                  {language === 'bn'
+                    ? 'লগইন / অ্যাকাউন্ট সক্রিয়করণ'
+                    : language === 'ar'
+                    ? 'تسجيل الدخول / تفعيل الحساب'
+                    : 'Login / Activate Account'}
                 </span>
               </button>
             </div>
@@ -4008,16 +5077,18 @@ export function MadrasaPortalApp() {
             applications={admissionApplications}
             students={students}
             guardianLinkRequests={guardianLinkRequests}
+            accountInvitations={accountInvitations}
             isPublicApplicantMode={true}
-            onReturnToLogin={(invitationCode) => {
-              setIsPublicAdmissionMode(false);
-              setPendingInvitationCode(invitationCode || '');
-              setShowLoginGate(true);
-            }}
+            onReturnToLogin={(invitationCode) =>
+              navigatePublicRoute('login', invitationCode || '')
+            }
             onSubmitApplication={handleSubmitAdmissionApplication}
             onUpdateApplication={handleUpdateAdmissionApplication}
             onApproveApplication={handleApproveAdmissionApplication}
             onReviewGuardianLinkRequest={handleReviewGuardianLinkRequest}
+            onResendOrRecoverInvitation={async (app, role) => {
+              await handleResendOrRecoverInvitation(app, role);
+            }}
           />
         </main>
       </div>
@@ -4151,8 +5222,24 @@ export function MadrasaPortalApp() {
               </div>
             </div>
 
-            {/* Right Zone: Notification Bell + Leave Mail + Admin Profile & Auth */}
+            {/* Right Zone: Website Link + Notification Bell + Leave Mail + Admin Profile & Auth */}
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+              <button
+                type="button"
+                data-testid="portal-header-open-website"
+                onClick={() => navigatePublicRoute('home')}
+                className="px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-[#063B27] border border-emerald-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Globe className="w-3.5 h-3.5" />
+                <span className="hidden md:inline">
+                  {language === 'bn'
+                    ? 'পাবলিক ওয়েবসাইট'
+                    : language === 'ar'
+                      ? 'الموقع العام'
+                      : 'Public Website'}
+                </span>
+              </button>
+
               {/* Notifications Bell Badge Button */}
               <button
                 type="button"
@@ -4438,6 +5525,7 @@ export function MadrasaPortalApp() {
                 applications={admissionApplications}
                 students={students}
                 guardianLinkRequests={guardianLinkRequests}
+                accountInvitations={accountInvitations}
                 isPublicApplicantMode={false}
                 onReturnToLogin={(invitationCode) => {
                   setIsPublicAdmissionMode(false);
@@ -4448,6 +5536,9 @@ export function MadrasaPortalApp() {
                 onUpdateApplication={handleUpdateAdmissionApplication}
                 onApproveApplication={handleApproveAdmissionApplication}
                 onReviewGuardianLinkRequest={handleReviewGuardianLinkRequest}
+                onResendOrRecoverInvitation={async (app, role) => {
+                  await handleResendOrRecoverInvitation(app, role);
+                }}
               />
             )}
 
@@ -4618,6 +5709,33 @@ export function MadrasaPortalApp() {
               />
             )}
 
+            {activeModule === 'website_cms' && (
+              <WebsiteCmsModule
+                language={language}
+                role={activeRole}
+                actorName={
+                  currentUserProfile?.displayName ||
+                  firebaseUser?.displayName ||
+                  (activeRole === 'muhtamim' ? 'মুহতামিম দপ্তর' : 'সুপার অ্যাডমিন')
+                }
+                cmsConfig={websiteCmsConfig}
+                settings={settings}
+                notices={notices}
+                staff={staff}
+                bannerSlides={bannerSlides}
+                onSaveCmsConfig={handleSaveWebsiteCmsConfig}
+                onSaveSettings={handleSaveSettings}
+                onAddNotice={handleAddNotice}
+                onUpdateNotice={(updatedNotice) =>
+                  handleUpdateNotice(updatedNotice.id, updatedNotice)
+                }
+                onDeleteNotice={handleDeleteNotice}
+                onPreviewPublicPage={(pagePath) => {
+                  navigateToPublicPage(pagePath);
+                }}
+              />
+            )}
+
             {activeModule === 'reports' && (
               <ReportsModule
                 language={language}
@@ -4641,11 +5759,15 @@ export function MadrasaPortalApp() {
                 isSuperAdminProvisioned={isSuperAdminProvisioned}
                 settings={settings}
                 users={users}
+                students={students}
+                admissionApplications={admissionApplications}
+                accountInvitations={accountInvitations}
                 bannerSlides={bannerSlides}
                 adminAuditLogs={adminAuditLogs}
                 onSaveSettings={handleSaveSettings}
                 onUpdateUserRole={handleUpdateUserRole}
                 onUpdateBannerSlide={handleUpdateBannerSlide}
+                onResendOrRecoverInvitation={handleResendOrRecoverInvitation}
               />
             )}
           </div>

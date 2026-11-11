@@ -181,7 +181,9 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
       setErrorMsg(
         lang === 'bn'
           ? 'ছবিটি লোড করা যায়নি। অনুগ্রহ করে অন্য একটি JPG বা PNG ছবি নির্বাচন করুন।'
-          : 'Could not decode image file. Please choose another JPG or PNG file.'
+          : lang === 'ar'
+            ? 'تعذر تحميل الصورة. يرجى اختيار ملف صورة آخر بصيغة JPG أو PNG.'
+            : 'Could not decode image file. Please choose another JPG or PNG file.'
       );
       setRawImageSrc(null);
     };
@@ -227,8 +229,12 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
 
     if (!validation.valid) {
       setErrorMsg(
-        (lang === 'en' ? validation.errorEn : validation.errorBn) ||
-          'অনুমোদিত ছবির ফরম্যাট নয়।'
+        (lang === 'en' || lang === 'ar' ? validation.errorEn : validation.errorBn) ||
+          (lang === 'ar'
+            ? 'صيغة الصورة غير مدعومة.'
+            : lang === 'en'
+              ? 'Unsupported photo format.'
+              : 'অনুমোদিত ছবির ফরম্যাট নয়।')
       );
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
@@ -270,7 +276,9 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
       setErrorMsg(
         lang === 'bn'
           ? 'ছবি সংরক্ষণে ত্রুটি হয়েছে। আবার চেষ্টা করুন।'
-          : 'Failed to save cropped photograph.'
+          : lang === 'ar'
+            ? 'حدث خطأ أثناء حفظ الصورة. يرجى المحاولة مرة أخرى.'
+            : 'Failed to save cropped photograph.'
       );
     } finally {
       setIsUploading(false);
@@ -306,7 +314,9 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
           <p className="text-xs text-[#6E675C] mt-0.5">
             {lang === 'bn'
               ? 'অনুমোদিত ফরম্যাট: JPG, PNG বা WEBP (সর্বোচ্চ ৫ মেগাবাইট · ১:১ ক্রপ সুবিধাসহ)'
-              : 'Supported: JPG, PNG, WEBP up to 5 MB with 1:1 square crop'}
+              : lang === 'ar'
+                ? 'الصيغ المدعومة: JPG و PNG و WEBP (بحد أقصى 5 ميجابايت مع قص مربع 1:1)'
+                : 'Supported: JPG, PNG, WEBP up to 5 MB with 1:1 square crop'}
           </p>
         </div>
 
@@ -331,10 +341,14 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
             {value
               ? lang === 'bn'
                 ? 'ছবি পরিবর্তন করুন'
-                : 'Replace Photo'
+                : lang === 'ar'
+                  ? 'تغيير الصورة'
+                  : 'Replace Photo'
               : lang === 'bn'
-              ? 'ছবি নির্বাচন করুন'
-              : 'Upload Photo'}
+                ? 'ছবি নির্বাচন করুন'
+                : lang === 'ar'
+                  ? 'رفع صورة'
+                  : 'Upload Photo'}
           </button>
 
           {!value && !rawImageSrc && (
@@ -345,7 +359,11 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-[#D4AF37]/50 bg-[#FFFDF8] text-[#1D1B18] hover:bg-[#F3EFE6] transition-colors cursor-pointer"
             >
               <ImagePlus className="w-3.5 h-3.5 text-[#B8860B]" />
-              {lang === 'bn' ? 'নমুনা ছবি যুক্ত করুন' : 'Use Sample Portrait'}
+              {lang === 'bn'
+                ? 'নমুনা ছবি যুক্ত করুন'
+                : lang === 'ar'
+                  ? 'استخدام صورة نموذجية'
+                  : 'Use Sample Portrait'}
             </button>
           )}
 
@@ -357,7 +375,7 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold border border-[#991B1B]/25 text-[#991B1B] bg-white hover:bg-[#FEF2F2] transition-colors cursor-pointer"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              {lang === 'bn' ? 'মুছে ফেলুন' : 'Remove'}
+              {lang === 'bn' ? 'মুছে ফেলুন' : lang === 'ar' ? 'حذف' : 'Remove'}
             </button>
           )}
         </div>
@@ -380,7 +398,11 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
               />
             </div>
             <span className="text-[11px] text-[#6E675C] mt-1.5">
-              {lang === 'bn' ? '১:১ ক্রপ প্রিভিউ' : '1:1 Square Crop Preview'}
+              {lang === 'bn'
+                ? '১:১ ক্রপ প্রিভিউ'
+                : lang === 'ar'
+                  ? 'معاينة القص المربع ١:١'
+                  : '1:1 Square Crop Preview'}
             </span>
           </div>
 
@@ -389,7 +411,7 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
               <label className="flex items-center justify-between text-xs font-semibold text-[#1D1B18] mb-1">
                 <span className="flex items-center gap-1">
                   <ZoomIn className="w-3.5 h-3.5 text-[#0F5132]" />
-                  {lang === 'bn' ? 'জুম (Zoom)' : 'Zoom Level'}
+                  {lang === 'bn' ? 'জুম (Zoom)' : lang === 'ar' ? 'مستوى التكبير' : 'Zoom Level'}
                 </span>
                 <span className="font-mono text-[11px] text-[#6E675C]">
                   {Math.round(zoom * 100)}%
@@ -414,7 +436,11 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
               <div>
                 <label className="flex items-center gap-1 text-[11px] font-semibold text-[#6E675C] mb-1">
                   <Move className="w-3 h-3" />
-                  {lang === 'bn' ? 'ডানে-বামে (Pan X)' : 'Horizontal Pan'}
+                  {lang === 'bn'
+                    ? 'ডানে-বামে (Pan X)'
+                    : lang === 'ar'
+                      ? 'إزاحة أفقية'
+                      : 'Horizontal Pan'}
                 </label>
                 <input
                   type="range"
@@ -429,7 +455,11 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
               <div>
                 <label className="flex items-center gap-1 text-[11px] font-semibold text-[#6E675C] mb-1">
                   <Move className="w-3 h-3" />
-                  {lang === 'bn' ? 'উপরে-নিচে (Pan Y)' : 'Vertical Pan'}
+                  {lang === 'bn'
+                    ? 'উপরে-নিচে (Pan Y)'
+                    : lang === 'ar'
+                      ? 'إزاحة عمودية'
+                      : 'Vertical Pan'}
                 </label>
                 <input
                   type="range"
@@ -455,7 +485,11 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
                 ) : (
                   <Check className="w-3.5 h-3.5" />
                 )}
-                {lang === 'bn' ? 'ক্রপ সম্পন্ন ও সংরক্ষণ করুন' : 'Apply Crop & Save'}
+                {lang === 'bn'
+                  ? 'ক্রপ সম্পন্ন ও সংরক্ষণ করুন'
+                  : lang === 'ar'
+                    ? 'تطبيق القص والحفظ'
+                    : 'Apply Crop & Save'}
               </button>
               <button
                 type="button"
@@ -463,7 +497,7 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
                 onClick={() => setRawImageSrc(null)}
                 className="px-3 py-2 rounded-lg text-xs font-semibold border border-[#E3DAC9] bg-white text-[#6E675C] hover:text-[#1D1B18] cursor-pointer"
               >
-                {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                {lang === 'bn' ? 'বাতিল' : lang === 'ar' ? 'إلغاء' : 'Cancel'}
               </button>
             </div>
           </div>
@@ -483,12 +517,16 @@ export const StudentPhotoCropUploader: React.FC<StudentPhotoCropUploaderProps> =
               <Check className="w-3.5 h-3.5" />
               {lang === 'bn'
                 ? 'শিক্ষার্থীর পাসপোর্ট ছবি সংযুক্ত করা হয়েছে'
-                : 'Student photograph attached & verified'}
+                : lang === 'ar'
+                  ? 'تم إرفاق وتوثيق صورة الطالب بنجاح'
+                  : 'Student photograph attached & verified'}
             </p>
             <p className="text-[#6E675C] mt-0.5">
               {lang === 'bn'
                 ? 'ভর্তি অনুমোদনের পর এই ছবিটি স্বয়ংক্রিয়ভাবে প্রোফাইল ও আইডি কার্ডে যুক্ত হবে।'
-                : 'This photo will automatically link to the student profile upon approval.'}
+                : lang === 'ar'
+                  ? 'سيتم ربط هذه الصورة تلقائياً بملف الطالب وبطاقة الهوية بعد اعتماد القبول.'
+                  : 'This photo will automatically link to the student profile upon approval.'}
             </p>
           </div>
         </div>

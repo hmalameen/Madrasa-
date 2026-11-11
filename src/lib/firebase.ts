@@ -3,11 +3,16 @@ import {
   createUserWithEmailAndPassword,
   getAuth,
   GoogleAuthProvider,
+  RecaptchaVerifier,
+  reload,
+  sendEmailVerification,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
+  signInWithPhoneNumber,
   signInWithPopup,
   signOut as firebaseSignOut,
   updateProfile,
+  type ConfirmationResult,
   type User,
 } from 'firebase/auth';
 import {
@@ -19,6 +24,8 @@ import {
 } from 'firebase/firestore';
 import { getDownloadURL, getStorage, ref, uploadBytes } from 'firebase/storage';
 import firebaseConfig from '../../firebase-applet-config.json';
+import type { UserRole } from '../types/madrasa';
+import { canManageWebsiteCms } from '../utils/websiteCmsLogic';
 
 const app = initializeApp(firebaseConfig);
 
@@ -72,6 +79,112 @@ export async function uploadStudentPhotoAsset(
   } catch {
     // When Firebase Storage bucket is not provisioned or offline, safely store compressed portrait data URL (validated <= 75KB in Firestore rules)
     return fallbackDataUrl;
+  }
+}
+
+export const ALLOWED_CMS_MEDIA_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/svg+xml',
+  'image/gif',
+  'application/pdf',
+];
+
+export const MAX_CMS_MEDIA_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+export async function uploadCmsMediaAsset(
+  file: Blob,
+  safeFileName: string
+): Promise<{
+  ok: boolean;
+  url?: string;
+  errorBn?: string;
+  errorEn?: string;
+}> {
+  if (!auth.currentUser) {
+    return {
+      ok: false,
+      errorBn:
+        'Firebase Storage-এ ফাইল আপলোড করতে অনুমোদিত সুপার অ্যাডমিন বা মুহতামিম হিসেবে Firebase Auth-এ সাইন ইন করা আবশ্যক। বিকল্প হিসেবে অনুমোদিত HTTPS ইমেজ URL ব্যবহার করুন।',
+      errorEn:
+        'You must be signed in with Firebase Auth as Super Admin or Muhtamim to upload files to Firebase Storage. Alternatively, paste an approved HTTPS image URL.',
+    };
+  }
+
+  // 1. File size validation (max 5 MB)
+  if (file.size > MAX_CMS_MEDIA_FILE_SIZE_BYTES) {
+    return {
+      ok: false,
+      errorBn: 'ফাইলের আকার সর্বোচ্চ ৫ মেগাবাইট (5 MB) হতে পারে।',
+      errorEn: 'File size must not exceed 5 MB.',
+    };
+  }
+
+  // 2. MIME type validation
+  const normalizedType = (file.type || '').trim().toLowerCase();
+  if (normalizedType && !ALLOWED_CMS_MEDIA_MIME_TYPES.includes(normalizedType)) {
+    return {
+      ok: false,
+      errorBn:
+        'শুধুমাত্র অনুমোদিত ইমেজ (JPEG, PNG, WebP, SVG, GIF) বা পিডিএফ ফাইল আপলোড করা যাবে।',
+      errorEn:
+        'Only allowed image types (JPEG, PNG, WebP, SVG, GIF) or PDF files may be uploaded.',
+    };
+  }
+
+  // 3. Trusted authorization check: verified session + Firestore role lookup
+  const user = auth.currentUser;
+  let isAuthorized = false;
+
+  if (isBootstrapSuperAdminEmail(user.email)) {
+    isAuthorized = true;
+  } else {
+    try {
+      const userSnap = await getDoc(doc(db, 'users', user.uid));
+      if (userSnap.exists()) {
+        const userRole = userSnap.data()?.role as UserRole | undefined;
+        if (userRole && canManageWebsiteCms(userRole)) {
+          isAuthorized = true;
+        }
+      }
+    } catch {
+      isAuthorized = false;
+    }
+  }
+
+  if (!isAuthorized) {
+    return {
+      ok: false,
+      errorBn:
+        'অননুমোদিত অনুরোধ। শুধুমাত্র সুপার অ্যাডমিন বা মুহতামিম ওয়েবসাইট মিডিয়া আপলোড করতে পারবেন।',
+      errorEn:
+        'Unauthorized. Only Super Admin or Muhtamim roles are permitted to upload website media assets.',
+    };
+  }
+
+  try {
+    const storagePath = `website-cms/${user.uid}/${Date.now()}-${safeFileName}`;
+    const mediaRef = ref(storage, storagePath);
+    const uploadTask = uploadBytes(mediaRef, file, {
+      contentType: file.type || 'image/jpeg',
+    });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Storage upload timeout')), 5000)
+    );
+    await Promise.race([uploadTask, timeoutPromise]);
+    const downloadUrl = await getDownloadURL(mediaRef);
+    return {
+      ok: true,
+      url: downloadUrl,
+    };
+  } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      errorBn: `Firebase Storage আপলোড সম্পন্ন হয়নি (${rawMsg})। বিনা অনুমতিতে বড় Base64 ছবি Firestore-এ সংরক্ষণ করা নিষিদ্ধ—অনুগ্রহ করে অনুমোদিত HTTPS ইমেজ URL প্রদান করুন।`,
+      errorEn: `Firebase Storage upload did not complete (${rawMsg}). Storing large raw Base64 images in Firestore is blocked—please provide an approved HTTPS image URL.`,
+    };
   }
 }
 
@@ -204,9 +317,67 @@ export async function requestPasswordResetEmail(email: string) {
   return sendPasswordResetEmail(auth, email.trim());
 }
 
+let activeRecaptchaVerifier: RecaptchaVerifier | null = null;
+
+export function clearRecaptchaVerifier(): void {
+  if (activeRecaptchaVerifier) {
+    try {
+      activeRecaptchaVerifier.clear();
+    } catch {
+      // ignore cleanup error
+    }
+    activeRecaptchaVerifier = null;
+  }
+}
+
+/**
+ * Initiates Firebase Phone Authentication SMS OTP to a Bangladesh (+8801XXXXXXXXX) phone number.
+ * Uses invisible reCAPTCHA attached to `containerId`. Never stores OTP values in Firestore.
+ */
+export async function sendGuardianPhoneOtp(
+  phoneNumberE164: string,
+  containerId = 'uqcm-recaptcha-container'
+): Promise<ConfirmationResult> {
+  clearRecaptchaVerifier();
+  activeRecaptchaVerifier = new RecaptchaVerifier(auth, containerId, {
+    size: 'invisible',
+  });
+  return signInWithPhoneNumber(auth, phoneNumberE164.trim(), activeRecaptchaVerifier);
+}
+
+export async function confirmGuardianPhoneOtp(
+  confirmationResult: ConfirmationResult,
+  otpCode: string
+) {
+  return confirmationResult.confirm(otpCode.trim());
+}
+
+/**
+ * Sends a Firebase Email Verification link to the currently signed-in guardian account.
+ */
+export async function sendGuardianVerificationEmail(targetUser?: User | null): Promise<void> {
+  const user = targetUser || auth.currentUser;
+  if (!user) {
+    throw new Error('NO_ACTIVE_AUTH_USER');
+  }
+  await sendEmailVerification(user);
+}
+
+/**
+ * Reloads the Firebase Auth user state from the server and checks whether `emailVerified` is true.
+ * Never marks an account verified purely by visiting a URL without checking Firebase's verified status.
+ */
+export async function reloadAndCheckEmailVerified(targetUser?: User | null): Promise<boolean> {
+  const user = targetUser || auth.currentUser;
+  if (!user) return false;
+  await reload(user);
+  return Boolean(user.emailVerified);
+}
+
 export async function signOutUser() {
   return firebaseSignOut(auth);
 }
 
-export { serverTimestamp };
+export { serverTimestamp, type ConfirmationResult };
+
 

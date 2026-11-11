@@ -20,12 +20,26 @@ import {
   User,
   UserCheck,
 } from 'lucide-react';
-import type { InvitationTargetRole, Language, UserRole } from '../types/madrasa';
+import type {
+  GuardianVerificationMethod,
+  InvitationTargetRole,
+  Language,
+  UserRole,
+} from '../types/madrasa';
 import { TRANSLATIONS } from '../i18n/translations';
+import {
+  auth,
+  confirmGuardianPhoneOtp,
+  reloadAndCheckEmailVerified,
+  sendGuardianPhoneOtp,
+  sendGuardianVerificationEmail,
+} from '../lib/firebase';
 import {
   type AuthScreenState,
   classifyLoginIdentifier,
+  isValidBangladeshPhone,
   mapFirebaseAuthErrorToMessage,
+  normalizeBangladeshPhone,
   type RegistrationFormInput,
   validateLoginInput,
   validateRegistrationInput,
@@ -66,6 +80,9 @@ export interface LoginScreenProps {
     verificationSecret: string;
     email: string;
     newPassword: string;
+    confirmPassword?: string;
+    guardianVerificationMethod?: GuardianVerificationMethod;
+    guardianContactVerified?: boolean;
   }) => Promise<{
     ok: boolean;
     messageBn: string;
@@ -92,6 +109,7 @@ export interface LoginScreenProps {
   authError: string | null;
   currentAccountStatus?: 'active' | 'pending' | 'suspended' | null;
   onSignOut?: () => Promise<void>;
+  onBackToWebsite?: () => void;
 }
 
 const PARTICLES = [
@@ -136,6 +154,45 @@ const FEATURE_BADGES = [
     labelAr: 'مستقبل مشرق',
   },
 ];
+
+function localizeAuthValidationErrors(
+  errors: Record<string, string>,
+  lang: Language
+): Record<string, string> {
+  if (lang === 'bn') return errors;
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(errors)) {
+    if (key === 'identifier') {
+      out[key] =
+        lang === 'ar'
+          ? 'يرجى إدخال رقم الطالب (Student ID) أو رقم الجوال (+880) أو البريد الإلكتروني بشكل صحيح'
+          : 'Please enter a valid Student ID (e.g. UQCM-2026-101), Mobile (+8801...), or Email';
+    } else if (key === 'password') {
+      out[key] =
+        lang === 'ar'
+          ? 'يرجى إدخال كلمة المرور (٦ أحرف على الأقل)'
+          : 'Password is required (minimum 6 characters)';
+    } else if (key === 'role') {
+      out[key] =
+        lang === 'ar'
+          ? 'يمكن التقديم لحساب طالب أو ولي أمر فقط'
+          : 'Only Student or Guardian account requests are permitted';
+    } else if (key === 'fullName') {
+      out[key] =
+        lang === 'ar'
+          ? 'الاسم الكامل مطلوب (حرفان على الأقل)'
+          : 'Full name must be at least 2 characters';
+    } else if (key === 'phone') {
+      out[key] =
+        lang === 'ar'
+          ? 'يرجى إدخال رقم جوال صحيح (مثل +8801711223344)'
+          : 'Please enter a valid mobile number (e.g. +8801711223344)';
+    } else {
+      out[key] = val;
+    }
+  }
+  return out;
+}
 
 function MadrasaGoldenCrest() {
   return (
@@ -325,6 +382,7 @@ export function LoginScreen({
   authError,
   currentAccountStatus,
   onSignOut,
+  onBackToWebsite,
 }: LoginScreenProps) {
   const t = TRANSLATIONS[language];
   const isRtl = language === 'ar';
@@ -335,6 +393,7 @@ export function LoginScreen({
   );
 
   // Login Form State
+  const [loginModeTab, setLoginModeTab] = useState<'guardian' | 'student' | 'staff'>('student');
   const [loginIdentifier, setLoginIdentifier] = useState<string>('');
   const [loginPassword, setLoginPassword] = useState<string>('');
   const [rememberMe, setRememberMe] = useState<boolean>(true);
@@ -349,6 +408,19 @@ export function LoginScreen({
   const [actSecret, setActSecret] = useState<string>('');
   const [actEmail, setActEmail] = useState<string>('');
   const [actPassword, setActPassword] = useState<string>('');
+  const [actConfirmPassword, setActConfirmPassword] = useState<string>('');
+  const [showActConfirmPassword, setShowActConfirmPassword] = useState<boolean>(false);
+  const [actVerificationMethod, setActVerificationMethod] =
+    useState<GuardianVerificationMethod>('sms_otp');
+  const [actOtpCode, setActOtpCode] = useState<string>('');
+  const [actOtpSent, setActOtpSent] = useState<boolean>(false);
+  const [actOtpCooldownSec, setActOtpCooldownSec] = useState<number>(0);
+  const [actContactVerified, setActContactVerified] = useState<boolean>(false);
+  const [actVerifyBusy, setActVerifyBusy] = useState<boolean>(false);
+  const [actVerifyStatusMsg, setActVerifyStatusMsg] = useState<{
+    ok: boolean;
+    text: string;
+  } | null>(null);
   const [actFeedback, setActFeedback] = useState<{
     ok: boolean;
     message: string;
@@ -369,6 +441,220 @@ export function LoginScreen({
       setScreenState('register');
     }
   }, [initialInvitationCode]);
+
+  // Cooldown timer for SMS OTP / Email Verification resend protection
+  useEffect(() => {
+    if (actOtpCooldownSec <= 0) return;
+    const timer = window.setInterval(() => {
+      setActOtpCooldownSec((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [actOtpCooldownSec]);
+
+  const [otpConfirmationResult, setOtpConfirmationResult] = useState<
+    Awaited<ReturnType<typeof sendGuardianPhoneOtp>> | null
+  >(null);
+
+  const isGuardianActivationCode = actCode.trim().toUpperCase().startsWith('ACT-GRD-');
+
+  const handleSendGuardianOtp = async () => {
+    setActVerifyStatusMsg(null);
+    const normalizedPhone = normalizeBangladeshPhone(actSecret);
+    if (!isValidBangladeshPhone(normalizedPhone)) {
+      setActVerifyStatusMsg({
+        ok: false,
+        text:
+          language === 'bn'
+            ? 'সঠিক বাংলাদেশি মোবাইল নম্বর (+8801XXXXXXXXX) ভেরিফিকেশন ঘরে লিখুন।'
+            : language === 'ar'
+              ? 'يرجى إدخال رقم جوال بنغلاديشي صحيح (+8801XXXXXXXXX).'
+              : 'Please enter a valid Bangladesh mobile number (+8801XXXXXXXXX).',
+      });
+      return;
+    }
+    if (actOtpCooldownSec > 0) return;
+
+    setActVerifyBusy(true);
+    try {
+      const confirmation = await sendGuardianPhoneOtp(
+        normalizedPhone,
+        'uqcm-recaptcha-container'
+      );
+      setOtpConfirmationResult(confirmation);
+      setActOtpSent(true);
+      setActOtpCooldownSec(60);
+      setActVerifyStatusMsg({
+        ok: true,
+        text:
+          language === 'bn'
+            ? `${normalizedPhone} নম্বরে ৬ সংখ্যার এসএমএস ওটিপি (OTP) পাঠানো হয়েছে।`
+            : language === 'ar'
+              ? `تم إرسال رمز التحقق (OTP) المكون من ٦ أرقام إلى ${normalizedPhone}.`
+              : `A 6-digit SMS OTP has been sent to ${normalizedPhone}.`,
+      });
+    } catch {
+      setActOtpSent(true);
+      setActOtpCooldownSec(30);
+      setActVerifyStatusMsg({
+        ok: false,
+        text:
+          language === 'bn'
+            ? 'এসএমএস ওটিপি সার্ভিস এই মুহূর্তে প্রস্তুত নয়। ইমেইল লিংক অথবা নিচে নিবন্ধিত মোবাইল নম্বর দিয়ে সরাসরি সক্রিয় করুন।'
+            : language === 'ar'
+              ? 'خدمة رسائل OTP غير متاحة حالياً. يرجى التحقق عبر رابط البريد الإلكتروني أو التفعيل أدناه.'
+              : 'SMS OTP service is currently unavailable. Please verify via email link or activate below.',
+      });
+    } finally {
+      setActVerifyBusy(false);
+    }
+  };
+
+  const handleConfirmGuardianOtp = async () => {
+    setActVerifyStatusMsg(null);
+    if (actOtpCode.trim().length < 6) {
+      setActVerifyStatusMsg({
+        ok: false,
+        text:
+          language === 'bn'
+            ? 'এসএমএস-এ প্রাপ্ত ৬ সংখ্যার ওটিপি (OTP) কোডটি লিখুন।'
+            : language === 'ar'
+              ? 'يرجى إدخال رمز التحقق المكون من ٦ أرقام.'
+              : 'Please enter the 6-digit SMS OTP code.',
+      });
+      return;
+    }
+    if (!otpConfirmationResult) {
+      setActVerifyStatusMsg({
+        ok: false,
+        text:
+          language === 'bn'
+            ? 'প্রথমে ওটিপি পাঠান বাটনে ক্লিক করুন।'
+            : language === 'ar'
+              ? 'يرجى طلب رمز التحقق (OTP) أولاً.'
+              : 'Please request an OTP code first.',
+      });
+      return;
+    }
+    setActVerifyBusy(true);
+    try {
+      await confirmGuardianPhoneOtp(otpConfirmationResult, actOtpCode);
+      setActContactVerified(true);
+      setActVerifyStatusMsg({
+        ok: true,
+        text:
+          language === 'bn'
+            ? 'মোবাইল নম্বর ওটিপি যাচাইকরণ সফলভাবে সম্পন্ন হয়েছে।'
+            : language === 'ar'
+              ? 'تم التحقق من رقم الجوال بنجاح.'
+              : 'Mobile number OTP verification completed successfully.',
+      });
+    } catch {
+      setActVerifyStatusMsg({
+        ok: false,
+        text:
+          language === 'bn'
+            ? 'ওটিপি কোডটি সঠিক নয় বা মেয়াদ উত্তীর্ণ হয়েছে।'
+            : language === 'ar'
+              ? 'رمز التحقق غير صحيح أو منتهي الصلاحية.'
+              : 'Invalid or expired OTP code.',
+      });
+    } finally {
+      setActVerifyBusy(false);
+    }
+  };
+
+  const handleSendEmailVerificationLink = async () => {
+    setActVerifyStatusMsg(null);
+    if (actOtpCooldownSec > 0) return;
+    if (!auth.currentUser) {
+      setActVerifyStatusMsg({
+        ok: true,
+        text:
+          language === 'bn'
+            ? 'অ্যাকাউন্ট সক্রিয় করার সাথে সাথেই আপনার ইমেইলে ভেরিফিকেশন লিংক পাঠানো হবে।'
+            : language === 'ar'
+              ? 'سيتم إرسال رابط التفعيل إلى بريدك الإلكتروني فور تفعيل الحساب.'
+              : 'Verification link will be sent to your email upon account creation.',
+      });
+      setActOtpCooldownSec(45);
+      return;
+    }
+    setActVerifyBusy(true);
+    try {
+      await sendGuardianVerificationEmail(auth.currentUser);
+      setActOtpCooldownSec(60);
+      setActVerifyStatusMsg({
+        ok: true,
+        text:
+          language === 'bn'
+            ? 'আপনার ইমেইলে ভেরিফিকেশন লিংক পাঠানো হয়েছে। ইনবক্স বা স্প্যাম ফোল্ডার দেখুন।'
+            : language === 'ar'
+              ? 'تم إرسال رابط التفعيل إلى بريدك الإلكتروني. يرجى مراجعة البريد الوارد.'
+              : 'Verification link sent to your email. Please check your inbox.',
+      });
+    } catch {
+      setActVerifyStatusMsg({
+        ok: false,
+        text:
+          language === 'bn'
+            ? 'ভেরিফিকেশন ইমেইল পাঠানো যায়নি। কিছুক্ষণ পর আবার চেষ্টা করুন।'
+            : language === 'ar'
+              ? 'تعذر إرسال بريد التحقق. يرجى المحاولة لاحقاً.'
+              : 'Could not send verification email. Please try again shortly.',
+      });
+    } finally {
+      setActVerifyBusy(false);
+    }
+  };
+
+  const handleCheckEmailVerifiedStatus = async () => {
+    setActVerifyStatusMsg(null);
+    if (!auth.currentUser) {
+      setActVerifyStatusMsg({
+        ok: false,
+        text:
+          language === 'bn'
+            ? 'প্রথমে নিচে পাসওয়ার্ড সেট করে অ্যাকাউন্ট সক্রিয়করণ বাটনে ক্লিক করুন, এরপর ইমেইল লিংক যাচাই করুন।'
+            : language === 'ar'
+              ? 'يرجى تعيين كلمة المرور وتفعيل الحساب أدناه أولاً، ثم التحقق من البريد الإلكتروني.'
+              : 'Please activate your account below first, then verify your email link.',
+      });
+      return;
+    }
+    setActVerifyBusy(true);
+    try {
+      const verified = await reloadAndCheckEmailVerified(auth.currentUser);
+      if (verified) {
+        setActContactVerified(true);
+      }
+      setActVerifyStatusMsg({
+        ok: verified,
+        text: verified
+          ? language === 'bn'
+            ? 'ইমেইল ভেরিফিকেশন সফলভাবে নিশ্চিত হয়েছে।'
+            : language === 'ar'
+              ? 'تم تأكيد البريد الإلكتروني بنجاح.'
+              : 'Email verification confirmed.'
+          : language === 'bn'
+            ? 'ইমেইল এখনও ভেরিফাই হয়নি। ইমেইলের লিংকে ক্লিক করে আবার যাচাই করুন।'
+            : language === 'ar'
+              ? 'لم يتم تأكيد البريد الإلكتروني بعد. اضغط على الرابط في بريدك وحاول مجدداً.'
+              : 'Email is not verified yet. Click the link in your email and check again.',
+      });
+    } catch {
+      setActVerifyStatusMsg({
+        ok: false,
+        text:
+          language === 'bn'
+            ? 'ইমেইল যাচাই স্ট্যাটাস পরীক্ষা করা যায়নি।'
+            : language === 'ar'
+              ? 'تعذر التحقق من حالة البريد الإلكتروني.'
+              : 'Could not check email verification status.',
+      });
+    } finally {
+      setActVerifyBusy(false);
+    }
+  };
 
   // Forgot Password Form State
   const [resetIdentifier, setResetIdentifier] = useState<string>('');
@@ -415,7 +701,7 @@ export function LoginScreen({
 
     const validation = validateLoginInput(loginIdentifier, loginPassword);
     if (!validation.valid) {
-      setLoginFieldErrors(validation.errors);
+      setLoginFieldErrors(localizeAuthValidationErrors(validation.errors, language));
       return;
     }
 
@@ -468,7 +754,7 @@ export function LoginScreen({
 
     const validation = validateRegistrationInput(payload);
     if (!validation.valid) {
-      setRegFieldErrors(validation.errors);
+      setRegFieldErrors(localizeAuthValidationErrors(validation.errors, language));
       return;
     }
 
@@ -495,11 +781,26 @@ export function LoginScreen({
     e.preventDefault();
     setActFeedback(null);
     if (!onActivateInvitation) return;
+    if (actConfirmPassword && actPassword !== actConfirmPassword) {
+      setActFeedback({
+        ok: false,
+        message:
+          language === 'bn'
+            ? 'নতুন পাসওয়ার্ড এবং নিশ্চিতকরণ পাসওয়ার্ড দুটি মিলছে না।'
+            : language === 'ar'
+              ? 'كلمة المرور الجديدة وتأكيد كلمة المرور غير متطابقتين.'
+              : 'Password and confirm password do not match.',
+      });
+      return;
+    }
     const res = await onActivateInvitation({
       invitationCode: actCode,
       verificationSecret: actSecret,
       email: actEmail,
       newPassword: actPassword,
+      confirmPassword: actConfirmPassword || actPassword,
+      guardianVerificationMethod: isGuardianActivationCode ? actVerificationMethod : undefined,
+      guardianContactVerified: actContactVerified,
     });
     setActFeedback({
       ok: res.ok,
@@ -664,7 +965,13 @@ export function LoginScreen({
         {/* Language Switcher Pill matching Reference Top-Left */}
         <div
           role="group"
-          aria-label="Language selection"
+          aria-label={
+            language === 'bn'
+              ? 'ভাষা নির্বাচন'
+              : language === 'ar'
+                ? 'اختيار اللغة'
+                : 'Language selection'
+          }
           className="inline-flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-[#071E32]/85 backdrop-blur-md border border-emerald-500/30 shadow-[0_4px_20px_rgba(0,0,0,0.4)]"
         >
           <Globe className="w-3.5 h-3.5 text-emerald-400 me-0.5 shrink-0" aria-hidden="true" />
@@ -695,6 +1002,23 @@ export function LoginScreen({
           })}
         </div>
 
+        {onBackToWebsite && (
+          <button
+            type="button"
+            data-testid="login-back-to-website-btn"
+            onClick={onBackToWebsite}
+            className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 rounded-xl bg-[#071E32]/85 hover:bg-[#0D2B45] text-[#F3D37A] border border-[#D4AF37]/40 text-xs font-bold shadow-[0_4px_20px_rgba(0,0,0,0.4)] transition-colors cursor-pointer"
+          >
+            <ArrowLeft className="w-3.5 h-3.5 rtl:rotate-180" />
+            <span>
+              {language === 'bn'
+                ? 'মাদ্রাসা ওয়েবসাইট (হোমপেজ)'
+                : language === 'ar'
+                  ? 'الموقع الرسمي للمدرسة'
+                  : 'Public Website (Home)'}
+            </span>
+          </button>
+        )}
       </header>
 
       {/* =====================================================================
@@ -753,23 +1077,31 @@ export function LoginScreen({
                 {/* Exact Tagline: Knowledge · Character · Excellence */}
                 <div className="mt-1.5 sm:mt-2.5 flex items-center justify-center gap-2 sm:gap-3 text-[11px] sm:text-sm font-medium text-slate-200 tracking-wide">
                   <span className="w-6 sm:w-12 h-px bg-gradient-to-r from-transparent to-[#E5B84B]/80" />
-                  <span>Knowledge</span>
+                  <span>
+                    {language === 'bn' ? 'ইলম' : language === 'ar' ? 'العلم' : 'Knowledge'}
+                  </span>
                   <span className="text-[#E5B84B]" aria-hidden="true">
                     ·
                   </span>
-                  <span>Character</span>
+                  <span>
+                    {language === 'bn' ? 'আখলাক' : language === 'ar' ? 'الأخلاق' : 'Character'}
+                  </span>
                   <span className="text-[#E5B84B]" aria-hidden="true">
                     ·
                   </span>
-                  <span>Excellence</span>
+                  <span>
+                    {language === 'bn' ? 'শ্রেষ্ঠত্ব' : language === 'ar' ? 'التميز' : 'Excellence'}
+                  </span>
                   <span className="w-6 sm:w-12 h-px bg-gradient-to-l from-transparent to-[#E5B84B]/80" />
                 </div>
 
-                {/* Bengali Motto Quote */}
+                {/* Institutional Motto Quote */}
                 <p className="mt-1 sm:mt-2 text-xs sm:text-base font-medium text-[#F3D37A] tracking-wide">
                   {language === 'ar'
                     ? '«التزامنا ببناء جيل مستنير بالقرآن والعلم»'
-                    : '“আলোকিত মানুষ গড়ার প্রতিশ্রুতি আমাদের”'}
+                    : language === 'en'
+                      ? '“Committed to nurturing enlightened individuals through sacred knowledge and discipline”'
+                      : '“আলোকিত মানুষ গড়ার প্রতিশ্রুতি আমাদের”'}
                 </p>
 
                 {/* Scenic Mosque Waterfront Illustration Inside Arch (Desktop & Tablet) */}
@@ -819,7 +1151,11 @@ export function LoginScreen({
                           <Icon className="w-5 h-5" />
                         </div>
                         <span className="mt-1.5 text-xs font-medium text-slate-200 leading-tight">
-                          {language === 'ar' ? feat.labelAr : feat.labelEn}
+                          {language === 'bn'
+                            ? feat.labelBn
+                            : language === 'ar'
+                              ? feat.labelAr
+                              : feat.labelEn}
                         </span>
                       </div>
                     );
@@ -897,7 +1233,7 @@ export function LoginScreen({
                    ========================================================= */}
                 {screenState === 'login' && (
                   <div key="login-view" className="relative z-10 animate-uqcm-view">
-                    <div className="mb-4 sm:mb-5">
+                    <div className="mb-3.5 sm:mb-4">
                       <h2 className="text-xl sm:text-2xl font-bold text-white">
                         {language === 'bn'
                           ? 'স্বাগতম!'
@@ -907,25 +1243,111 @@ export function LoginScreen({
                       </h2>
                       <p className="mt-0.5 sm:mt-1 text-xs sm:text-sm text-slate-300">
                         {language === 'bn'
-                          ? 'আপনার অ্যাকাউন্টে প্রবেশ করুন'
+                          ? 'আপনার নির্ধারিত পোর্টাল নির্বাচন করে প্রবেশ করুন'
                           : language === 'ar'
                             ? 'قم بتسجيل الدخول إلى حسابك'
-                            : 'Sign in to your institutional account'}
+                            : 'Select your portal mode and sign in'}
                       </p>
                     </div>
 
+                    {/* 3 Login Mode Tabs: 1. Guardian Login | 2. Student ID Login | 3. Staff / Admin Login */}
+                    <div
+                      role="tablist"
+                      aria-label="Portal login type"
+                      data-testid="login-mode-tabs"
+                      className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#041220]/90 border border-slate-700/80 mb-3.5"
+                    >
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={loginModeTab === 'guardian'}
+                        data-testid="login-tab-guardian"
+                        onClick={() => {
+                          setLoginModeTab('guardian');
+                          setLoginFieldErrors({});
+                        }}
+                        className={`py-1.5 px-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          loginModeTab === 'guardian'
+                            ? 'bg-emerald-800/85 text-[#F3D37A] border border-[#E5B84B]/50 shadow-2xs'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        {language === 'bn'
+                          ? 'অভিভাবক লগইন'
+                          : language === 'ar'
+                            ? 'ولي الأمر'
+                            : 'Guardian Login'}
+                      </button>
+
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={loginModeTab === 'student'}
+                        data-testid="login-tab-student"
+                        onClick={() => {
+                          setLoginModeTab('student');
+                          setLoginFieldErrors({});
+                        }}
+                        className={`py-1.5 px-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          loginModeTab === 'student'
+                            ? 'bg-emerald-800/85 text-[#F3D37A] border border-[#E5B84B]/50 shadow-2xs'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        {language === 'bn'
+                          ? 'শিক্ষার্থী লগইন'
+                          : language === 'ar'
+                            ? 'دخول الطالب'
+                            : 'Student Login'}
+                      </button>
+
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={loginModeTab === 'staff'}
+                        data-testid="login-tab-staff"
+                        onClick={() => {
+                          setLoginModeTab('staff');
+                          setLoginFieldErrors({});
+                        }}
+                        className={`py-1.5 px-1.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                          loginModeTab === 'staff'
+                            ? 'bg-emerald-800/85 text-[#F3D37A] border border-[#E5B84B]/50 shadow-2xs'
+                            : 'text-slate-300 hover:text-white'
+                        }`}
+                      >
+                        {language === 'bn'
+                          ? 'স্টাফ / অ্যাডমিন'
+                          : language === 'ar'
+                            ? 'الإدارة والمعلمين'
+                            : 'Staff / Admin'}
+                      </button>
+                    </div>
+
                     <form onSubmit={handleLoginSubmit} noValidate className="space-y-3.5 sm:space-y-4">
-                      {/* Username / Student ID Input */}
+                      {/* Username / Student ID / Guardian Phone or Email Input */}
                       <div>
                         <label
                           htmlFor="uqcm-login-id"
                           className="block text-xs sm:text-sm font-semibold text-slate-200 mb-1.5"
                         >
-                          {language === 'bn'
-                            ? 'ইউজারনেম / স্টুডেন্ট আইডি'
-                            : language === 'ar'
-                              ? 'اسم المستخدم / رقم الطالب'
-                              : 'Username / Student ID'}
+                          {loginModeTab === 'student'
+                            ? language === 'bn'
+                              ? 'স্টুডেন্ট আইডি (Student ID) অথবা ইমেইল'
+                              : language === 'ar'
+                                ? 'رقم الطالب (Student ID)'
+                                : 'Student ID (e.g. UQCM-2026-101)'
+                            : loginModeTab === 'guardian'
+                              ? language === 'bn'
+                                ? 'যাচাইকৃত মোবাইল নম্বর (+880) অথবা ইমেইল'
+                                : language === 'ar'
+                                  ? 'رقم الجوال الموثق أو البريد الإلكتروني'
+                                  : 'Verified Mobile (+880) or Email'
+                              : language === 'bn'
+                                ? 'দাপ্তরিক ইমেইল / স্টুডেন্ট আইডি'
+                                : language === 'ar'
+                                  ? 'البريد الإلكتروني الرسمي'
+                                  : 'Institutional Email / ID'}
                         </label>
                         <div className="uqcm-input-shell flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-[#041220]/90 border border-slate-600/80">
                           <User className="w-4 h-4 text-emerald-400 shrink-0" aria-hidden="true" />
@@ -936,11 +1358,23 @@ export function LoginScreen({
                             value={loginIdentifier}
                             onChange={(e) => setLoginIdentifier(e.target.value)}
                             placeholder={
-                              language === 'bn'
-                                ? 'আপনার ইউজারনেম বা আইডি লিখুন'
-                                : language === 'ar'
-                                  ? 'أدخل اسم المستخدم أو رقم الطالب'
-                                  : 'Enter Username, Student ID or Email'
+                              loginModeTab === 'student'
+                                ? language === 'bn'
+                                  ? 'উদাঃ UQCM-2026-101'
+                                  : language === 'ar'
+                                    ? 'مثال: UQCM-2026-101'
+                                    : 'e.g. UQCM-2026-101'
+                                : loginModeTab === 'guardian'
+                                  ? language === 'bn'
+                                    ? '+8801711345678 অথবা guardian@email.com'
+                                    : language === 'ar'
+                                      ? '+8801711345678 أو guardian@email.com'
+                                      : '+8801711345678 or guardian@email.com'
+                                  : language === 'bn'
+                                    ? 'আপনার নিবন্ধিত ইমেইল বা আইডি লিখুন'
+                                    : language === 'ar'
+                                      ? 'أدخل البريد الإلكتروني الرسمي أو المعرف'
+                                      : 'Enter Institutional Email or Username'
                             }
                             className="w-full bg-transparent text-sm text-white placeholder:text-slate-400 focus:outline-none"
                           />
@@ -1083,10 +1517,10 @@ export function LoginScreen({
                       >
                         <span>
                           {language === 'bn'
-                            ? 'নতুন অ্যাকাউন্টের জন্য আবেদন করুন'
+                            ? 'নতুন অ্যাকাউন্টের জন্য আবেদন করুন / সক্রিয় করুন'
                             : language === 'ar'
                               ? 'التقدم بطلب للحصول على حساب جديد'
-                              : 'Apply for a new Student/Guardian account'}
+                              : 'Activate or Apply for a Student/Guardian account'}
                         </span>
                         <ArrowRight className={`w-3.5 h-3.5 text-[#F3D37A] ${isRtl ? 'rotate-180' : ''}`} />
                       </button>
@@ -1130,7 +1564,9 @@ export function LoginScreen({
                       <p className="mt-0.5 text-xs text-slate-300">
                         {language === 'bn'
                           ? 'লগইন ছাড়াই নতুন অনলাইন ভর্তি আবেদন করুন অথবা বিদ্যমান ইউজার হিসেবে প্রবেশ করুন'
-                          : 'Submit a new online admission application without logging in, or sign in as an existing user'}
+                          : language === 'ar'
+                            ? 'تقدم بطلب قبول إلكتروني جديد دون تسجيل دخول، أو ادخل إلى حسابك الحالي'
+                            : 'Submit a new online admission application without logging in, or sign in as an existing user'}
                       </p>
                     </div>
 
@@ -1149,18 +1585,26 @@ export function LoginScreen({
                             <GraduationCap className="w-4 h-4" />
                           </span>
                           <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-[#E5B84B]/20 text-[#F3D37A]">
-                            {language === 'bn' ? 'লগইন নিষ্প্রয়োজন' : 'No Login Needed'}
+                            {language === 'bn'
+                              ? 'লগইন নিষ্প্রয়োজন'
+                              : language === 'ar'
+                                ? 'بدون تسجيل دخول'
+                                : 'No Login Needed'}
                           </span>
                         </div>
                         <p className="text-xs sm:text-sm font-bold text-white mt-2 group-hover:text-[#F3D37A]">
                           {language === 'bn'
                             ? '১. নতুন ভর্তি আবেদন'
-                            : '1. New Admission Application'}
+                            : language === 'ar'
+                              ? '١. طلب قبول جديد'
+                              : '1. New Admission Application'}
                         </p>
                         <p className="text-[11px] text-emerald-100/90 mt-0.5 leading-snug">
                           {language === 'bn'
                             ? '৪-ধাপের ভর্তি ফরম, ছবি আপলোড ও রেফারেন্স ট্র্যাকিং'
-                            : '4-step form, photo upload & status tracking'}
+                            : language === 'ar'
+                              ? 'نموذج من ٤ خطوات ورفع الصورة ومتابعة حالة الطلب'
+                              : '4-step form, photo upload & status tracking'}
                         </p>
                       </button>
 
@@ -1177,17 +1621,21 @@ export function LoginScreen({
                           <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-emerald-500/15 border border-emerald-400/40 text-emerald-300">
                             <UserCheck className="w-4 h-4" />
                           </span>
-                          <ArrowRight className="w-3.5 h-3.5 text-emerald-400 group-hover:translate-x-0.5 transition-transform" />
+                          <ArrowRight className="w-3.5 h-3.5 text-emerald-400 group-hover:translate-x-0.5 rtl:rotate-180 transition-transform" />
                         </div>
                         <p className="text-xs sm:text-sm font-bold text-white mt-2 group-hover:text-[#F3D37A]">
                           {language === 'bn'
                             ? '২. বিদ্যমান ইউজার লগইন'
-                            : '2. Existing User Login'}
+                            : language === 'ar'
+                              ? '٢. دخول المستخدمين الحاليين'
+                              : '2. Existing User Login'}
                         </p>
                         <p className="text-[11px] text-slate-300 mt-0.5 leading-snug">
                           {language === 'bn'
                             ? 'অনুমোদিত শিক্ষার্থী, অভিভাবক, শিক্ষক ও মুহতামিম লগইন'
-                            : 'Sign in to Student, Guardian, Teacher or Admin portal'}
+                            : language === 'ar'
+                              ? 'دخول الطلاب وأولياء الأمور والمعلمين والإدارة'
+                              : 'Sign in to Student, Guardian, Teacher or Admin portal'}
                         </p>
                       </button>
                     </div>
@@ -1209,7 +1657,9 @@ export function LoginScreen({
                       >
                         {language === 'bn'
                           ? 'অনুমোদিত অ্যাকাউন্ট সক্রিয়করণ'
-                          : 'Activate Approved Account'}
+                          : language === 'ar'
+                            ? 'تفعيل حساب معتمد'
+                            : 'Activate Approved Account'}
                       </button>
                       <button
                         type="button"
@@ -1226,7 +1676,9 @@ export function LoginScreen({
                       >
                         {language === 'bn'
                           ? 'অ্যাকাউন্ট রিকোয়েস্ট'
-                          : 'Account Request'}
+                          : language === 'ar'
+                            ? 'طلب حساب'
+                            : 'Account Request'}
                       </button>
                     </div>
 
@@ -1234,8 +1686,10 @@ export function LoginScreen({
                       <form onSubmit={handleActivationSubmit} noValidate className="space-y-3">
                         <div className="p-2.5 rounded-xl bg-[#041220]/90 border border-[#E5B84B]/30 text-[11px] text-slate-200 leading-relaxed">
                           {language === 'bn'
-                            ? 'সুপার অ্যাডমিন বা মুহতামিম কর্তৃক ইস্যুকৃত এককালীন অ্যাক্টিভেশন কোড (মুহতামিম: ACT-MUH-..., শিক্ষক/স্টাফ: ACT-TCH-..., শিক্ষার্থী: ACT-STU-..., অভিভাবক: ACT-GRD-...) ও পাসওয়ার্ড সেট করে পোর্টালে প্রবেশ করুন।'
-                            : 'Enter the single-use activation code (Muhtamim: ACT-MUH-..., Teacher: ACT-TCH-..., Student: ACT-STU-..., Guardian: ACT-GRD-...) and set your password.'}
+                            ? 'সুপার অ্যাডমিন বা মুহতামিম কর্তৃক ইস্যুকৃত এককালীন অ্যাক্টিভেশন কোড (অভিভাবক: ACT-GRD-..., শিক্ষার্থী: ACT-STU-..., শিক্ষক/মুহতামিম: ACT-TCH-... / ACT-MUH-...) এবং আপনার নিজস্ব পাসওয়ার্ড সেট করে পোর্টালে প্রবেশ করুন।'
+                            : language === 'ar'
+                              ? 'أدخل رمز التفعيل لمرة واحدة الصادر من الإدارة (ولي الأمر: ACT-GRD-...، الطالب: ACT-STU-...، المعلم/الإدارة: ACT-TCH-... / ACT-MUH-...) وقم بتعيين كلمة المرور الخاصة بك.'
+                              : 'Enter the single-use activation code (Guardian: ACT-GRD-..., Student: ACT-STU-..., Teacher/Muhtamim: ACT-TCH-... / ACT-MUH-...) and set your own password.'}
                         </div>
 
                         <div>
@@ -1245,7 +1699,9 @@ export function LoginScreen({
                           >
                             {language === 'bn'
                               ? 'এককালীন অ্যাক্টিভেশন কোড (Single-Use Activation Code) *'
-                              : 'Single-Use Activation Code *'}
+                              : language === 'ar'
+                                ? 'رمز التفعيل لمرة واحدة (Activation Code) *'
+                                : 'Single-Use Activation Code *'}
                           </label>
                           <div className="uqcm-input-shell flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-[#041220]/90 border border-slate-600/80">
                             <ShieldCheck className="w-4 h-4 text-[#E5B84B] shrink-0" />
@@ -1254,7 +1710,7 @@ export function LoginScreen({
                               type="text"
                               value={actCode}
                               onChange={(e) => setActCode(e.target.value)}
-                              placeholder="ACT-MUH-... / ACT-TCH-... / ACT-STU-..."
+                              placeholder="ACT-GRD-... / ACT-STU-... / ACT-TCH-..."
                               data-testid="act-input-code"
                               className="w-full bg-transparent text-xs sm:text-sm font-mono text-white placeholder:text-slate-400 focus:outline-none"
                             />
@@ -1268,8 +1724,10 @@ export function LoginScreen({
                               className="block text-xs font-semibold text-slate-200 mb-1"
                             >
                               {language === 'bn'
-                                ? 'ভেরিফিকেশন মোবাইল / আইডি কোড *'
-                                : 'Registered Mobile / ID Code *'}
+                                ? 'ভেরিফিকেশন মোবাইল (+880) / স্টুডেন্ট আইডি *'
+                                : language === 'ar'
+                                  ? 'الجوال المسجل (+880) / رقم الطالب *'
+                                  : 'Registered Mobile (+880) / Student ID *'}
                             </label>
                             <div className="uqcm-input-shell flex items-center gap-2 px-3 py-2 rounded-xl bg-[#041220]/90 border border-slate-600/80">
                               <Phone className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -1278,7 +1736,7 @@ export function LoginScreen({
                                 type="text"
                                 value={actSecret}
                                 onChange={(e) => setActSecret(e.target.value)}
-                                placeholder="01711-001122 / UQCM-EMP-01 / UQCM-2026-103"
+                                placeholder="+8801711345678 / UQCM-2026-101"
                                 data-testid="act-input-secret"
                                 className="w-full bg-transparent text-xs text-white placeholder:text-slate-400 focus:outline-none"
                               />
@@ -1291,8 +1749,10 @@ export function LoginScreen({
                               className="block text-xs font-semibold text-slate-200 mb-1"
                             >
                               {language === 'bn'
-                                ? 'লগইন ইমেইল (ঐচ্ছিক)'
-                                : 'Login Email (Optional)'}
+                                ? 'লগইন ইমেইল (ঐচ্ছিক / ইমেইল ভেরিফিকেশন)'
+                                : language === 'ar'
+                                  ? 'البريد الإلكتروني (اختياري)'
+                                  : 'Login Email (Optional)'}
                             </label>
                             <div className="uqcm-input-shell flex items-center gap-2 px-3 py-2 rounded-xl bg-[#041220]/90 border border-slate-600/80">
                               <User className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -1301,7 +1761,7 @@ export function LoginScreen({
                                 type="email"
                                 value={actEmail}
                                 onChange={(e) => setActEmail(e.target.value)}
-                                placeholder="student@ummulquran.edu.bd"
+                                placeholder="guardian@email.com"
                                 data-testid="act-input-email"
                                 className="w-full bg-transparent text-xs text-white placeholder:text-slate-400 focus:outline-none"
                               />
@@ -1309,37 +1769,258 @@ export function LoginScreen({
                           </div>
                         </div>
 
-                        <div>
-                          <label
-                            htmlFor="uqcm-act-password"
-                            className="block text-xs font-semibold text-slate-200 mb-1"
+                        {/* Guardian Verification Method (SMS OTP vs Email Link) when activating Guardian Account */}
+                        {isGuardianActivationCode && (
+                          <div
+                            data-testid="guardian-activation-verification-panel"
+                            className="p-3 rounded-xl bg-[#041829]/95 border border-emerald-500/40 space-y-2.5"
                           >
-                            {language === 'bn'
-                              ? 'নতুন গোপন পাসওয়ার্ড সেট করুন (কমপক্ষে ৮ অক্ষর) *'
-                              : 'Set New Password (Min 8 chars) *'}
-                          </label>
-                          <div className="uqcm-input-shell flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-[#041220]/90 border border-slate-600/80">
-                            <Lock className="w-4 h-4 text-emerald-400 shrink-0" />
-                            <input
-                              id="uqcm-act-password"
-                              type={showRegPassword ? 'text' : 'password'}
-                              value={actPassword}
-                              onChange={(e) => setActPassword(e.target.value)}
-                              placeholder="••••••••••••"
-                              data-testid="act-input-password"
-                              className="w-full bg-transparent text-xs sm:text-sm text-white placeholder:text-slate-400 focus:outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setShowRegPassword((prev) => !prev)}
-                              className="text-slate-400 hover:text-emerald-300 cursor-pointer"
-                            >
-                              {showRegPassword ? (
-                                <EyeOff className="w-4 h-4" />
-                              ) : (
-                                <Eye className="w-4 h-4" />
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[11px] font-bold text-[#F3D37A]">
+                                {language === 'bn'
+                                  ? 'অভিভাবক পরিচয় যাচাইকরণ (Guardian Verification)'
+                                  : language === 'ar'
+                                    ? 'التحقق من هوية ولي الأمر'
+                                    : 'Guardian Contact Verification'}
+                              </span>
+                              {actContactVerified && (
+                                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/50 text-[10px] font-bold text-emerald-200">
+                                  {language === 'bn'
+                                    ? 'যাচাইকৃত ✓'
+                                    : language === 'ar'
+                                      ? 'موثق ✓'
+                                      : 'Verified ✓'}
+                                </span>
                               )}
-                            </button>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActVerificationMethod('sms_otp');
+                                  setActVerifyStatusMsg(null);
+                                }}
+                                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                                  actVerificationMethod === 'sms_otp'
+                                    ? 'bg-emerald-900/80 border-[#E5B84B]/60 text-[#F3D37A]'
+                                    : 'bg-[#041220] border-slate-700 text-slate-300'
+                                }`}
+                              >
+                                {language === 'bn'
+                                  ? 'A. মোবাইল SMS OTP'
+                                  : language === 'ar'
+                                    ? 'أ. رسالة SMS OTP'
+                                    : 'A. Mobile SMS OTP'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setActVerificationMethod('email_link');
+                                  setActVerifyStatusMsg(null);
+                                }}
+                                className={`py-1.5 px-2 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                                  actVerificationMethod === 'email_link'
+                                    ? 'bg-emerald-900/80 border-[#E5B84B]/60 text-[#F3D37A]'
+                                    : 'bg-[#041220] border-slate-700 text-slate-300'
+                                }`}
+                              >
+                                {language === 'bn'
+                                  ? 'B. ইমেইল ভেরিফিকেশন লিংক'
+                                  : language === 'ar'
+                                    ? 'ب. رابط البريد الإلكتروني'
+                                    : 'B. Email Link'}
+                              </button>
+                            </div>
+
+                            {actVerificationMethod === 'sms_otp' ? (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={actVerifyBusy || actOtpCooldownSec > 0}
+                                    onClick={handleSendGuardianOtp}
+                                    className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-[11px] font-bold cursor-pointer shrink-0"
+                                  >
+                                    {actOtpCooldownSec > 0
+                                      ? `${
+                                          language === 'bn'
+                                            ? 'পুনরায় পাঠান'
+                                            : language === 'ar'
+                                              ? 'إعادة الإرسال'
+                                              : 'Resend'
+                                        } (${actOtpCooldownSec}s)`
+                                      : actOtpSent
+                                        ? language === 'bn'
+                                          ? 'পুনরায় OTP পাঠান'
+                                          : language === 'ar'
+                                            ? 'إعادة إرسال OTP'
+                                            : 'Resend OTP'
+                                        : language === 'bn'
+                                          ? 'SMS OTP পাঠান'
+                                          : language === 'ar'
+                                            ? 'إرسال SMS OTP'
+                                            : 'Send SMS OTP'}
+                                  </button>
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    maxLength={6}
+                                    value={actOtpCode}
+                                    onChange={(e) =>
+                                      setActOtpCode(e.target.value.replace(/[^0-9]/g, ''))
+                                    }
+                                    placeholder={
+                                      language === 'bn'
+                                        ? '৬ সংখ্যার OTP'
+                                        : language === 'ar'
+                                          ? 'رمز من ٦ أرقام'
+                                          : '6-digit OTP'
+                                    }
+                                    className="w-full px-2.5 py-1.5 rounded-lg bg-[#041220] border border-slate-600 text-xs font-mono text-white"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={actVerifyBusy || actOtpCode.length < 6}
+                                    onClick={handleConfirmGuardianOtp}
+                                    className="px-3 py-1.5 rounded-lg bg-[#E5B84B] hover:bg-amber-400 disabled:opacity-50 text-slate-950 text-[11px] font-bold cursor-pointer shrink-0"
+                                  >
+                                    {language === 'bn'
+                                      ? 'যাচাই'
+                                      : language === 'ar'
+                                        ? 'تحقق'
+                                        : 'Verify'}
+                                  </button>
+                                </div>
+                                <div id="uqcm-recaptcha-container" />
+                              </div>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  disabled={actVerifyBusy || actOtpCooldownSec > 0}
+                                  onClick={handleSendEmailVerificationLink}
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-[11px] font-bold cursor-pointer"
+                                >
+                                  {actOtpCooldownSec > 0
+                                    ? `${
+                                        language === 'bn'
+                                          ? 'পুনরায় লিংক পাঠান'
+                                          : language === 'ar'
+                                            ? 'إعادة إرسال الرابط'
+                                            : 'Resend Link'
+                                      } (${actOtpCooldownSec}s)`
+                                    : language === 'bn'
+                                      ? 'ভেরিফিকেশন লিংক পাঠান'
+                                      : language === 'ar'
+                                        ? 'إرسال رابط التحقق'
+                                        : 'Send Verification Link'}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={actVerifyBusy}
+                                  onClick={handleCheckEmailVerifiedStatus}
+                                  className="px-3 py-1.5 rounded-lg bg-[#041220] hover:bg-slate-800 border border-emerald-400/50 text-emerald-200 text-[11px] font-bold cursor-pointer"
+                                >
+                                  {language === 'bn'
+                                    ? 'ইমেইল ভেরিফিকেশন স্ট্যাটাস চেক করুন'
+                                    : language === 'ar'
+                                      ? 'التحقق من حالة البريد الإلكتروني'
+                                      : 'Check Verification Status'}
+                                </button>
+                              </div>
+                            )}
+
+                            {actVerifyStatusMsg && (
+                              <p
+                                className={`text-[11px] font-medium ${
+                                  actVerifyStatusMsg.ok ? 'text-emerald-300' : 'text-amber-200'
+                                }`}
+                              >
+                                {actVerifyStatusMsg.text}
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Self-Created Password + Confirm Password */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label
+                              htmlFor="uqcm-act-password"
+                              className="block text-xs font-semibold text-slate-200 mb-1"
+                            >
+                              {language === 'bn'
+                                ? 'নতুন পাসওয়ার্ড (কমপক্ষে ৮ অক্ষর) *'
+                                : language === 'ar'
+                                  ? 'كلمة المرور الجديدة (٨ أحرف على الأقل) *'
+                                  : 'New Password (Min 8 chars) *'}
+                            </label>
+                            <div className="uqcm-input-shell flex items-center gap-2 px-3 py-2 rounded-xl bg-[#041220]/90 border border-slate-600/80">
+                              <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <input
+                                id="uqcm-act-password"
+                                type={showRegPassword ? 'text' : 'password'}
+                                value={actPassword}
+                                onChange={(e) => setActPassword(e.target.value)}
+                                placeholder="••••••••"
+                                data-testid="act-input-password"
+                                className="w-full bg-transparent text-xs text-white placeholder:text-slate-400 focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowRegPassword((prev) => !prev)}
+                                aria-label={showRegPassword ? 'Hide password' : 'Show password'}
+                                className="text-slate-400 hover:text-emerald-300 cursor-pointer"
+                              >
+                                {showRegPassword ? (
+                                  <EyeOff className="w-3.5 h-3.5" />
+                                ) : (
+                                  <Eye className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label
+                              htmlFor="uqcm-act-confirm-password"
+                              className="block text-xs font-semibold text-slate-200 mb-1"
+                            >
+                              {language === 'bn'
+                                ? 'পাসওয়ার্ড নিশ্চিত করুন (Confirm) *'
+                                : language === 'ar'
+                                  ? 'تأكيد كلمة المرور *'
+                                  : 'Confirm Password *'}
+                            </label>
+                            <div className="uqcm-input-shell flex items-center gap-2 px-3 py-2 rounded-xl bg-[#041220]/90 border border-slate-600/80">
+                              <Lock className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                              <input
+                                id="uqcm-act-confirm-password"
+                                type={showActConfirmPassword ? 'text' : 'password'}
+                                value={actConfirmPassword}
+                                onChange={(e) => setActConfirmPassword(e.target.value)}
+                                placeholder="••••••••"
+                                data-testid="act-input-confirm-password"
+                                className="w-full bg-transparent text-xs text-white placeholder:text-slate-400 focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setShowActConfirmPassword((prev) => !prev)}
+                                aria-label={
+                                  showActConfirmPassword
+                                    ? 'Hide confirm password'
+                                    : 'Show confirm password'
+                                }
+                                className="text-slate-400 hover:text-emerald-300 cursor-pointer"
+                              >
+                                {showActConfirmPassword ? (
+                                  <EyeOff className="w-3.5 h-3.5" />
+                                ) : (
+                                  <Eye className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
                           </div>
                         </div>
 
@@ -1371,7 +2052,9 @@ export function LoginScreen({
                           <span>
                             {language === 'bn'
                               ? 'অ্যাকাউন্ট সক্রিয় করুন ও পোর্টালে প্রবেশ করুন'
-                              : 'Activate Account & Enter Portal'}
+                              : language === 'ar'
+                                ? 'تفعيل الحساب والدخول إلى البوابة'
+                                : 'Activate Account & Enter Portal'}
                           </span>
                         </button>
                       </form>
@@ -1401,12 +2084,16 @@ export function LoginScreen({
                               <option value="student">
                                 {language === 'bn'
                                   ? 'শিক্ষার্থী (Student Portal)'
-                                  : 'Student (শিক্ষার্থী)'}
+                                  : language === 'ar'
+                                    ? 'طالب (بوابة الطالب)'
+                                    : 'Student Portal'}
                               </option>
                               <option value="guardian">
                                 {language === 'bn'
                                   ? 'অভিভাবক (Guardian Portal)'
-                                  : 'Guardian (অভিভাবক)'}
+                                  : language === 'ar'
+                                    ? 'ولي أمر (بوابة ولي الأمر)'
+                                    : 'Guardian Portal'}
                               </option>
                             </select>
                           </div>
@@ -1427,7 +2114,11 @@ export function LoginScreen({
                               value={regFullName}
                               onChange={(e) => setRegFullName(e.target.value)}
                               placeholder={
-                                language === 'bn' ? 'আপনার পূর্ণ নাম লিখুন' : 'Enter your full name'
+                                language === 'bn'
+                                  ? 'আপনার পূর্ণ নাম লিখুন'
+                                  : language === 'ar'
+                                    ? 'أدخل اسمك الكامل'
+                                    : 'Enter your full name'
                               }
                               className="w-full bg-transparent text-xs sm:text-sm text-white placeholder:text-slate-400 focus:outline-none"
                             />
@@ -1571,11 +2262,23 @@ export function LoginScreen({
                     <button
                       type="button"
                       onClick={() => setScreenState('login')}
-                      aria-label="Back to login"
+                      aria-label={
+                        language === 'bn'
+                          ? 'লগইন পেজে ফিরুন'
+                          : language === 'ar'
+                            ? 'العودة إلى تسجيل الدخول'
+                            : 'Back to login'
+                      }
                       className="mb-3 inline-flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white cursor-pointer"
                     >
                       <ArrowLeft className={`w-4 h-4 ${isRtl ? 'rotate-180' : ''}`} />
-                      <span>{language === 'bn' ? 'ফিরে যান' : 'Back'}</span>
+                      <span>
+                        {language === 'bn'
+                          ? 'ফিরে যান'
+                          : language === 'ar'
+                            ? 'رجوع'
+                            : 'Back'}
+                      </span>
                     </button>
 
                     <div className="flex flex-col items-center text-center mb-5">
@@ -1601,7 +2304,11 @@ export function LoginScreen({
                     <form onSubmit={handleForgotSubmit} noValidate className="space-y-4">
                       <div>
                         <label htmlFor="uqcm-reset-id" className="sr-only">
-                          {language === 'bn' ? 'ইউজারনেম / ইমেইল' : 'Username or Email'}
+                          {language === 'bn'
+                            ? 'ইউজারনেম / ইমেইল'
+                            : language === 'ar'
+                              ? 'اسم المستخدم / البريد الإلكتروني'
+                              : 'Username or Email'}
                         </label>
                         <div className="uqcm-input-shell flex items-center gap-3 px-3.5 py-2.5 rounded-xl bg-[#041220]/90 border border-slate-600/80">
                           <User className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -1808,13 +2515,17 @@ export function LoginScreen({
                           <span>
                             {language === 'bn'
                               ? 'আবেদনটি সিস্টেমে নিবন্ধিত হয়েছে'
-                              : 'Application recorded in system'}
+                              : language === 'ar'
+                                ? 'تم تسجيل الطلب في النظام'
+                                : 'Application recorded in system'}
                           </span>
                         </div>
                         <p className="text-[11px] text-slate-300 leading-relaxed">
                           {language === 'bn'
                             ? 'মুহতামিম অথবা সুপার অ্যাডমিন আপনার স্টুডেন্ট আইডি যাচাই করে অনুমোদন দিলে আপনি পোর্টালে সকল তথ্য দেখতে পারবেন।'
-                            : 'Once the Muhtamim or Super Admin links and approves your Student ID, full portal access will unlock automatically.'}
+                            : language === 'ar'
+                              ? 'بمجرد مراجعة واعتماد رقم الطالب من قبل المهتمم أو المشرف العام، سيتم تفعيل الدخول الكامل للبوابة تلقائياً.'
+                              : 'Once the Muhtamim or Super Admin links and approves your Student ID, full portal access will unlock automatically.'}
                         </p>
                       </div>
                     )}
@@ -1840,7 +2551,11 @@ export function LoginScreen({
                         }}
                         className="text-xs text-slate-300 hover:text-[#F3D37A] cursor-pointer"
                       >
-                        {language === 'bn' ? '← লগইন পেজে ফিরুন' : '← Back to Login'}
+                        {language === 'bn'
+                          ? '← লগইন পেজে ফিরুন'
+                          : language === 'ar'
+                            ? 'العودة إلى تسجيل الدخول'
+                            : '← Back to Login'}
                       </button>
                     </div>
                   </div>
@@ -1880,10 +2595,24 @@ export function LoginScreen({
                         <div className="font-bold text-[#F3D37A]">
                           {language === 'bn'
                             ? 'উম্মুল কুরআন ক্যাডেট মাদ্রাসা দপ্তর'
-                            : 'Ummul Quran Cadet Madrasa Office'}
+                            : language === 'ar'
+                              ? 'مكتب إدارة مدرسة أم القرآن كاديت'
+                              : 'Ummul Quran Cadet Madrasa Office'}
                         </div>
-                        <div>হেল্পলাইন: +৮৮০ ১৭১১-০০০০০০</div>
-                        <div>ইমেইল: info@ummulquranmadrasa.edu.bd</div>
+                        <div>
+                          {language === 'bn'
+                            ? 'হেল্পলাইন: +৮৮০ ১৭১১-০০০০০০'
+                            : language === 'ar'
+                              ? 'خط المساعدة: +880 1711-000000'
+                              : 'Helpline: +880 1711-000000'}
+                        </div>
+                        <div>
+                          {language === 'bn'
+                            ? 'ইমেইল: info@ummulquranmadrasa.edu.bd'
+                            : language === 'ar'
+                              ? 'البريد الإلكتروني: info@ummulquranmadrasa.edu.bd'
+                              : 'Email: info@ummulquranmadrasa.edu.bd'}
+                        </div>
                       </div>
                     )}
 
@@ -1908,7 +2637,11 @@ export function LoginScreen({
                         }}
                         className="text-xs text-slate-300 hover:text-[#F3D37A] cursor-pointer"
                       >
-                        {language === 'bn' ? '← লগইন পেজে ফিরুন' : '← Back to Login'}
+                        {language === 'bn'
+                          ? '← লগইন পেজে ফিরুন'
+                          : language === 'ar'
+                            ? 'العودة إلى تسجيل الدخول'
+                            : '← Back to Login'}
                       </button>
                     </div>
                   </div>
@@ -1929,16 +2662,30 @@ export function LoginScreen({
             <span className="font-semibold text-[#F3D37A]">
               {language === 'bn'
                 ? 'উম্মুল কুরআন ক্যাডেট মাদ্রাসা · অনুমোদিত রোলভিত্তিক অ্যাক্সেস কন্ট্রোল (RBAC)'
-                : 'Ummul Quran Cadet Madrasa · Role-Based Access Governance'}
+                : language === 'ar'
+                  ? 'مدرسة أم القرآن كاديت · نظام الصلاحيات المعتمد (RBAC)'
+                  : 'Ummul Quran Cadet Madrasa · Role-Based Access Governance'}
             </span>
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] text-slate-300">
-            <span className="text-emerald-300 font-medium">Secure Access</span>
+            <span className="text-emerald-300 font-medium">
+              {language === 'bn'
+                ? 'নিরাপদ প্রবেশাধিকার'
+                : language === 'ar'
+                  ? 'دخول آمن'
+                  : 'Secure Access'}
+            </span>
             <span className="text-[#E5B84B]" aria-hidden="true">
               ·
             </span>
-            <span>Responsive Design</span>
+            <span>
+              {language === 'bn'
+                ? 'রেসপনসিভ পোর্টাল'
+                : language === 'ar'
+                  ? 'بوابة متجاوبة'
+                  : 'Responsive Design'}
+            </span>
             <span className="text-[#E5B84B]" aria-hidden="true">
               ·
             </span>

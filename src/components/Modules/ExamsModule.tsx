@@ -821,6 +821,7 @@ export function ExamsModule({
     const actionMap = {
       draft: 'return_for_correction',
       submitted_for_review: 'submit_for_review',
+      under_review: 'submit_for_review',
       approved: 'approve',
       published: 'publish',
     } as const;

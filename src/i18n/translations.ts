@@ -70,6 +70,7 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     switchRolePreview: 'রোল পরিবর্তন (প্রিভিউ)',
     navModules: {
       dashboard: 'ড্যাশবোর্ড সারসংক্ষেপ',
+      website_cms: 'ওয়েবসাইট সিএমএস (CMS)',
       admissions: 'অনলাইন ভর্তি ও অনুমোদন',
       students: 'শিক্ষার্থী ব্যবস্থাপনা',
       staff: 'শিক্ষক ও স্টাফ',
@@ -146,6 +147,7 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     switchRolePreview: 'Switch Role View',
     navModules: {
       dashboard: 'Dashboard Overview',
+      website_cms: 'Website CMS',
       admissions: 'Online Admission & Approval',
       students: 'Student Management',
       staff: 'Teachers & Staff',
@@ -222,6 +224,7 @@ export const TRANSLATIONS: Record<Language, TranslationDictionary> = {
     switchRolePreview: 'تبديل الدور (معاينة)',
     navModules: {
       dashboard: 'لوحة المعلومات',
+      website_cms: 'إدارة محتوى الموقع (CMS)',
       admissions: 'القبول الإلكتروني والاعتماد',
       students: 'إدارة الطلاب',
       staff: 'الأساتذة والموظفون',

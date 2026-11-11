@@ -17,6 +17,7 @@ export type DepartmentCode = Department;
 
 export type ModuleId =
   | 'dashboard'
+  | 'website_cms'
   | 'admissions'
   | 'students'
   | 'staff'
@@ -120,8 +121,21 @@ export interface AttendanceRecord {
 export type ExamWorkflowStatus =
   | 'draft'
   | 'submitted_for_review'
+  | 'under_review'
   | 'approved'
   | 'published';
+
+export interface ExamResultAuditEntry {
+  timestamp: string;
+  actorUid: string;
+  actorName: string;
+  actorRole: UserRole;
+  action: ExamAuditAction;
+  summaryBn: string;
+  previousMarks?: number;
+  newMarks?: number;
+  reason?: string;
+}
 
 export interface ExamResult {
   id: string;
@@ -158,6 +172,7 @@ export interface ExamResult {
   correctionReason?: string;
   correctedAt?: string;
   correctedByUid?: string;
+  auditHistory?: ExamResultAuditEntry[];
   guardianUid: string;
   authorId: string;
   createdAt?: unknown;
@@ -378,6 +393,20 @@ export type AdmissionStatus =
 
 export type AdmissionEntrySource = 'online_public' | 'muhtamim_direct';
 
+export type GuardianVerificationMethod = 'sms_otp' | 'email_link';
+
+export type GuardianVerificationStatus =
+  | 'unverified'
+  | 'pending_verification'
+  | 'verified';
+
+export type AccountActivationLifecycleStatus =
+  | 'not_started'
+  | 'pending_guardian_verification'
+  | 'pending_activation'
+  | 'activated'
+  | 'suspended';
+
 export interface AdmissionApplication {
   id: string;
   referenceNo: string;
@@ -406,6 +435,9 @@ export interface AdmissionApplication {
   guardianPhone: string;
   guardianEmail: string;
   requestGuardianAccount: boolean;
+  guardianVerificationMethod?: GuardianVerificationMethod;
+  guardianVerificationStatus?: GuardianVerificationStatus;
+  guardianVerifiedAt?: string;
   guardianUid: string;
   // Step 3: Academic & Admission Details
   department: Department;
@@ -432,6 +464,21 @@ export interface AdmissionApplication {
   assignedMonthlyFeeBdt: number;
   studentInvitationCode?: string;
   guardianInvitationCode?: string;
+  accountActivationStatus?: AccountActivationLifecycleStatus;
+  applicantNameBn?: string;
+  guardianAccountStatus?:
+    | 'not_requested'
+    | 'pending'
+    | 'pending_verification'
+    | 'pending_activation'
+    | 'activated'
+    | 'active';
+  studentAccountStatus?:
+    | 'not_requested'
+    | 'pending'
+    | 'pending_activation'
+    | 'activated'
+    | 'active';
   submittedDate?: string;
   reviewedDate?: string;
   reviewedByUid: string;
@@ -485,14 +532,17 @@ export interface AccountInvitation {
   applicationId: string;
   studentId: string;
   admissionNo: string;
-  studentNameBn: string;
+  studentNameBn?: string;
   recipientName: string;
   recipientPhone: string;
   recipientEmail: string;
-  activationUrl: string;
-  status: 'pending_activation' | 'activated' | 'revoked' | 'expired';
-  provisioningMode: 'single_use_activation_link';
-  requiresPasswordChangeOnFirstLogin: boolean;
+  activationUrl?: string;
+  status: 'pending' | 'pending_activation' | 'activated' | 'revoked' | 'expired';
+  provisioningMode?: 'single_use_activation_link';
+  requiresPasswordChangeOnFirstLogin?: boolean;
+  verificationMethod?: GuardianVerificationMethod;
+  verificationStatus?: GuardianVerificationStatus;
+  verifiedAt?: string;
   issuedByUid: string;
   issuedByRole?: UserRole;
   issuedAt: string;
@@ -560,8 +610,10 @@ export interface ExamSubjectConfig {
   subjectCode: string;
   subjectName: string;
   maxMarks: number;
+  fullMarks?: number;
   passMarks: number;
   isOptional?: boolean;
+  isCompulsory?: boolean;
 }
 
 export interface GradingTierConfig {
@@ -635,4 +687,231 @@ export interface ExamAuditLog {
   detailsBn?: string;
   previousValueSummary?: string;
 }
+
+// ============================================================================
+// Phase 4 — Institutional Website CMS Types
+// ============================================================================
+
+export type CmsPublicationStatus = 'draft' | 'published';
+
+export type HomepageSectionId =
+  | 'hero'
+  | 'intro'
+  | 'departments'
+  | 'why_choose_us'
+  | 'muhtamim_message'
+  | 'teachers_admin'
+  | 'admission_highlights'
+  | 'notices_preview'
+  | 'events_news'
+  | 'results_achievements'
+  | 'gallery_preview'
+  | 'contact_footer';
+
+export interface CmsHomepageSectionConfig {
+  id: HomepageSectionId;
+  visible: boolean;
+  status: CmsPublicationStatus;
+  badgeBn: string;
+  badgeEn: string;
+  badgeAr: string;
+  titleBn: string;
+  titleEn: string;
+  titleAr: string;
+  subtitleBn: string;
+  subtitleEn: string;
+  subtitleAr: string;
+  descriptionBn: string;
+  descriptionEn: string;
+  descriptionAr: string;
+  primaryCtaBn?: string;
+  primaryCtaEn?: string;
+  primaryCtaAr?: string;
+  secondaryCtaBn?: string;
+  secondaryCtaEn?: string;
+  secondaryCtaAr?: string;
+  mediaNoteBn?: string;
+  mediaNoteEn?: string;
+  mediaNoteAr?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export type CmsPublicPageSlug =
+  | '/about'
+  | '/academic'
+  | '/departments'
+  | '/teachers'
+  | '/administration'
+  | '/admission'
+  | '/notices'
+  | '/events'
+  | '/gallery'
+  | '/contact';
+
+export interface CmsInstitutionalPageContent {
+  slug: CmsPublicPageSlug;
+  status: CmsPublicationStatus;
+  badgeBn: string;
+  badgeEn: string;
+  badgeAr: string;
+  titleBn: string;
+  titleEn: string;
+  titleAr: string;
+  subtitleBn: string;
+  subtitleEn: string;
+  subtitleAr: string;
+  summaryBn: string;
+  summaryEn: string;
+  summaryAr: string;
+  highlightsBn: string[];
+  highlightsEn: string[];
+  highlightsAr: string[];
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export interface CmsPublicProfile {
+  id: string;
+  profileType: 'teacher' | 'administration';
+  nameBn: string;
+  nameEn: string;
+  nameAr: string;
+  designationBn: string;
+  designationEn: string;
+  designationAr: string;
+  department: 'hifz' | 'qawmi' | 'general' | 'administration' | 'boarding';
+  biographyBn: string;
+  biographyEn: string;
+  biographyAr: string;
+  photoUrl: string;
+  displayOrder: number;
+  status: 'published' | 'unpublished';
+  updatedAt: string;
+}
+
+export interface CmsPublicEvent {
+  id: string;
+  titleBn: string;
+  titleEn: string;
+  titleAr: string;
+  descriptionBn: string;
+  descriptionEn: string;
+  descriptionAr: string;
+  eventDate: string;
+  category: 'academic' | 'exam' | 'admission' | 'event';
+  badgeBn: string;
+  badgeEn: string;
+  badgeAr: string;
+  coverImageUrl: string;
+  galleryImageUrls: string[];
+  status: CmsPublicationStatus;
+  updatedAt: string;
+}
+
+export interface CmsGalleryItem {
+  id: string;
+  departmentKey: 'hifz' | 'qawmi' | 'general' | 'residential';
+  categoryBn: string;
+  categoryEn: string;
+  categoryAr: string;
+  titleBn: string;
+  titleEn: string;
+  titleAr: string;
+  captionBn: string;
+  captionEn: string;
+  captionAr: string;
+  detailsBn: string;
+  detailsEn: string;
+  detailsAr: string;
+  imageUrl: string;
+  accentColor: string;
+  displayOrder: number;
+  status: CmsPublicationStatus;
+  updatedAt: string;
+}
+
+export interface CmsContactFooterConfig {
+  status: CmsPublicationStatus;
+  institutionNameBn: string;
+  institutionNameEn: string;
+  institutionNameAr: string;
+  addressBn: string;
+  addressEn: string;
+  addressAr: string;
+  phone: string;
+  email: string;
+  mapLink: string;
+  facebookUrl: string;
+  youtubeUrl: string;
+  whatsappNumber: string;
+  footerDescriptionBn: string;
+  footerDescriptionEn: string;
+  footerDescriptionAr: string;
+  officeHoursBn: string;
+  officeHoursEn: string;
+  officeHoursAr: string;
+  updatedAt: string;
+}
+
+export interface CmsActivityLogItem {
+  id: string;
+  section: 'homepage' | 'pages' | 'teachers' | 'notices' | 'events' | 'gallery' | 'contact';
+  titleBn: string;
+  titleEn: string;
+  titleAr: string;
+  status: 'draft' | 'published' | 'unpublished';
+  timestamp: string;
+  actorName: string;
+}
+
+export interface CmsNoticeMetadata {
+  status: CmsPublicationStatus;
+  category: 'general' | 'academic' | 'exam' | 'admission' | 'holiday';
+  expiryDate: string;
+  attachmentUrl: string;
+  titleAr: string;
+  contentEn: string;
+  contentAr: string;
+}
+
+export interface CmsDraftNotice {
+  id: string;
+  titleBn: string;
+  titleEn: string;
+  titleAr: string;
+  contentBn: string;
+  contentEn: string;
+  contentAr: string;
+  category: 'general' | 'academic' | 'exam' | 'admission' | 'holiday';
+  targetAudience: 'all' | 'guardians' | 'teachers' | 'residential' | 'students';
+  targetClass: string;
+  priority: 'normal' | 'important' | 'urgent';
+  publishDate: string;
+  expiryDate?: string;
+  attachmentUrl?: string;
+  authorName?: string;
+  authorId: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WebsiteCmsConfig {
+  id: string;
+  homepageSections: Record<HomepageSectionId, CmsHomepageSectionConfig>;
+  publishedHomepageSections?: Record<HomepageSectionId, CmsHomepageSectionConfig>;
+  pages: Record<CmsPublicPageSlug, CmsInstitutionalPageContent>;
+  publishedPages?: Record<CmsPublicPageSlug, CmsInstitutionalPageContent>;
+  publicProfiles: CmsPublicProfile[];
+  events: CmsPublicEvent[];
+  galleryItems: CmsGalleryItem[];
+  contactFooter: CmsContactFooterConfig;
+  publishedContactFooter?: CmsContactFooterConfig;
+  draftNotices?: CmsDraftNotice[];
+  recentUpdates: CmsActivityLogItem[];
+  updatedAt: string;
+  updatedBy: string;
+}
+
+
 

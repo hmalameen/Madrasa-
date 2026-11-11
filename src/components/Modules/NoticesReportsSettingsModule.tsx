@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Download, Megaphone, Plus, Printer, Settings as SettingsIcon, Shield, X } from 'lucide-react';
 import type {
+  AccountInvitation,
   AdminAuditLog,
+  AdmissionApplication,
   AttendanceRecord,
   BannerSlide,
   FeeInvoice,
@@ -21,6 +23,7 @@ import {
   generateCsvContent,
   validateInstitutionSettings,
 } from '../../utils/madrasaLogic';
+import { decodeNoticeWithCmsMeta } from '../../utils/websiteCmsLogic';
 
 // --- MODULE 11: NOTICES & COMMUNICATION ---
 export function NoticesModule({
@@ -87,38 +90,55 @@ export function NoticesModule({
       </div>
 
       <div className="space-y-4">
-        {notices.map((n) => (
-          <article key={n.id} className="bg-white border border-stone-200 rounded-xl p-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
-              <div className="flex items-center gap-2">
-                <Megaphone className="w-4 h-4 text-[#0B3B2E]" />
-                <span className="font-mono tabular-nums">{n.publishDate}</span>
-                <span aria-hidden="true">·</span>
-                <span>প্রাপক: {n.targetAudience.toUpperCase()}</span>
-                <span aria-hidden="true">·</span>
-                <span>{n.targetClass}</span>
+        {notices
+          .map((n) => {
+            const { cleanNotice, cmsMeta } = decodeNoticeWithCmsMeta(n);
+            return { rawNotice: n, cleanNotice, cmsMeta };
+          })
+          .filter(({ cmsMeta }) => {
+            // Never leak draft notices to non-admins (teachers, students, guardians)
+            if (cmsMeta.status === 'draft' && !['super_admin', 'muhtamim'].includes(role)) {
+              return false;
+            }
+            return true;
+          })
+          .map(({ rawNotice, cleanNotice, cmsMeta }) => (
+            <article key={rawNotice.id} className="bg-white border border-stone-200 rounded-xl p-5">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                <div className="flex items-center gap-2">
+                  <Megaphone className="w-4 h-4 text-[#0B3B2E]" />
+                  <span className="font-mono tabular-nums">{cleanNotice.publishDate}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>প্রাপক: {cleanNotice.targetAudience.toUpperCase()}</span>
+                  <span aria-hidden="true">·</span>
+                  <span>{cleanNotice.targetClass}</span>
+                  {cmsMeta.status === 'draft' && (
+                    <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
+                      খসড়া (Draft)
+                    </span>
+                  )}
+                </div>
+                <span
+                  className={`font-semibold ${
+                    cleanNotice.priority === 'urgent'
+                      ? 'text-red-700'
+                      : cleanNotice.priority === 'important'
+                        ? 'text-amber-800'
+                        : 'text-slate-600'
+                  }`}
+                >
+                  {cleanNotice.priority === 'urgent'
+                    ? 'জরুরি বিজ্ঞপ্তি (Urgent)'
+                    : cleanNotice.priority === 'important'
+                      ? 'গুরুত্বপূর্ণ (Important)'
+                      : 'সাধারণ বিজ্ঞপ্তি'}
+                </span>
               </div>
-              <span
-                className={`font-semibold ${
-                  n.priority === 'urgent'
-                    ? 'text-red-700'
-                    : n.priority === 'important'
-                      ? 'text-amber-800'
-                      : 'text-slate-600'
-                }`}
-              >
-                {n.priority === 'urgent'
-                  ? 'জরুরি বিজ্ঞপ্তি (Urgent)'
-                  : n.priority === 'important'
-                    ? 'গুরুত্বপূর্ণ (Important)'
-                    : 'সাধারণ বিজ্ঞপ্তি'}
-              </span>
-            </div>
-            <h2 className="mt-2 text-base font-bold text-slate-900">{n.titleBn}</h2>
-            {n.titleEn && <p className="text-xs text-slate-500">{n.titleEn}</p>}
-            <p className="mt-2 text-sm text-slate-700 leading-relaxed">{n.contentBn}</p>
-          </article>
-        ))}
+              <h2 className="mt-2 text-base font-bold text-slate-900">{cleanNotice.titleBn}</h2>
+              {cleanNotice.titleEn && <p className="text-xs text-slate-500">{cleanNotice.titleEn}</p>}
+              <p className="mt-2 text-sm text-slate-700 leading-relaxed">{cleanNotice.contentBn}</p>
+            </article>
+          ))}
       </div>
 
       {isModalOpen && (
@@ -563,11 +583,15 @@ export function SettingsModule({
   isSuperAdminProvisioned = false,
   settings,
   users,
+  students = [],
+  admissionApplications = [],
+  accountInvitations = [],
   bannerSlides,
   adminAuditLogs = [],
   onSaveSettings,
   onUpdateUserRole,
   onUpdateBannerSlide,
+  onResendOrRecoverInvitation,
 }: {
   language: Language;
   role: UserRole;
@@ -575,6 +599,9 @@ export function SettingsModule({
   isSuperAdminProvisioned?: boolean;
   settings: InstitutionSettings;
   users: UserProfile[];
+  students?: Student[];
+  admissionApplications?: AdmissionApplication[];
+  accountInvitations?: AccountInvitation[];
   bannerSlides: BannerSlide[];
   adminAuditLogs?: AdminAuditLog[];
   onSaveSettings: (updated: InstitutionSettings) => Promise<boolean>;
@@ -585,16 +612,33 @@ export function SettingsModule({
     linkedStudentIds?: string
   ) => Promise<boolean>;
   onUpdateBannerSlide: (updatedSlide: BannerSlide) => Promise<boolean>;
+  onResendOrRecoverInvitation?: (
+    applicationId: string,
+    targetRole: 'guardian' | 'student'
+  ) => Promise<{ ok: boolean; messageBn: string; newCode?: string }>;
 }) {
   const t = TRANSLATIONS[language];
   const isAdmin = ['super_admin', 'muhtamim'].includes(role);
   const [formState, setFormState] = useState<InstitutionSettings>(settings);
   const [savedBanner, setSavedBanner] = useState(false);
+  const [slideDrafts, setSlideDrafts] = useState<Record<string, BannerSlide>>({});
+  const [savingSlideId, setSavingSlideId] = useState<string | null>(null);
+  const [savedSlideId, setSavedSlideId] = useState<string | null>(null);
+  const [slideSaveError, setSlideSaveError] = useState<string | null>(null);
+  const [recoveryFeedback, setRecoveryFeedback] = useState<string | null>(null);
 
   // Sync local form state whenever cloud settings update
   useEffect(() => {
     setFormState(settings);
   }, [settings]);
+
+  useEffect(() => {
+    const nextDrafts: Record<string, BannerSlide> = {};
+    for (const s of bannerSlides) {
+      nextDrafts[s.id] = s;
+    }
+    setSlideDrafts(nextDrafts);
+  }, [bannerSlides]);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -603,6 +647,27 @@ export function SettingsModule({
     if (saved) {
       setSavedBanner(true);
       setTimeout(() => setSavedBanner(false), 3000);
+    }
+  };
+
+  const handleSaveSlideDraft = async (slideId: string) => {
+    if (!isAdmin) return;
+    const draft = slideDrafts[slideId] || bannerSlides.find((s) => s.id === slideId);
+    if (!draft) return;
+    setSlideSaveError(null);
+    setSavingSlideId(slideId);
+    try {
+      const ok = await onUpdateBannerSlide(draft);
+      if (ok) {
+        setSavedSlideId(slideId);
+        setTimeout(() => {
+          setSavedSlideId((prev) => (prev === slideId ? null : prev));
+        }, 2500);
+      } else {
+        setSlideSaveError('ব্যানার স্লাইডটি সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।');
+      }
+    } finally {
+      setSavingSlideId(null);
     }
   };
 
@@ -922,6 +987,185 @@ export function SettingsModule({
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Guardian Verification & Student Account Activation Governance (PART 4) */}
+      <div
+        data-testid="guardian-student-activation-governance"
+        className="bg-white border border-stone-200 rounded-xl overflow-hidden"
+      >
+        <div className="px-6 py-4 border-b border-stone-200 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-bold text-slate-900">
+              ২(খ). অভিভাবক ভেরিফিকেশন ও স্টুডেন্ট আইডি অ্যাক্টিভেশন তদারকি (Guardian & Student Account Lifecycle)
+            </h2>
+            <p className="text-xs text-slate-600 mt-0.5">
+              অনুমোদিত ভর্তি আবেদনগুলোর অভিভাবক ভেরিফিকেশন পদ্ধতি, অ্যাক্টিভেশন স্ট্যাটাস, সংযুক্ত স্টুডেন্ট আইডি এবং রিকভারি কোড ব্যবস্থাপনা।
+            </p>
+          </div>
+          {recoveryFeedback && (
+            <span className="px-3 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-900">
+              {recoveryFeedback}
+            </span>
+          )}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-start border-collapse">
+            <thead>
+              <tr className="border-b border-stone-200 bg-stone-50 text-xs font-semibold text-slate-600">
+                <th className="py-3 px-4 text-start">স্টুডেন্ট আইডি ও শিক্ষার্থী</th>
+                <th className="py-3 px-4 text-start">সংযুক্ত অভিভাবক ও যোগাযোগ</th>
+                <th className="py-3 px-4 text-start">অভিভাবক ভেরিফিকেশন পদ্ধতি ও অবস্থা</th>
+                <th className="py-3 px-4 text-start">অভিভাবক ও শিক্ষার্থী অ্যাক্টিভেশন</th>
+                <th className="py-3 px-4 text-start">তৈরির তারিখ ও রিকভারি অ্যাকশন</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-stone-200 text-xs">
+              {admissionApplications.filter((a) => a.status === 'approved').length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-6 px-4 text-center text-slate-500">
+                    এখনো কোনো অনুমোদিত ভর্তি আবেদনের অ্যাক্টিভেশন রেকর্ড নেই।
+                  </td>
+                </tr>
+              ) : (
+                admissionApplications
+                  .filter((a) => a.status === 'approved')
+                  .map((app) => {
+                    const stuInv = accountInvitations.find(
+                      (i) =>
+                        i.applicationId === app.id && i.targetRole === 'student'
+                    );
+                    const grdInv = accountInvitations.find(
+                      (i) =>
+                        i.applicationId === app.id && i.targetRole === 'guardian'
+                    );
+                    const linkedStu = students.find(
+                      (s) =>
+                        s.id === app.assignedStudentId ||
+                        s.admissionNo === app.assignedAdmissionNo
+                    );
+                    const methodLabel =
+                      app.guardianVerificationMethod === 'email_link'
+                        ? 'ইমেইল লিংক (Email Link)'
+                        : 'মোবাইল ওটিপি (SMS OTP)';
+                    const verStatus =
+                      app.guardianVerificationStatus ||
+                      (grdInv?.status === 'activated' ? 'verified' : 'pending_verification');
+                    const grdActStatus =
+                      app.guardianAccountStatus ||
+                      grdInv?.status ||
+                      'pending_activation';
+                    const stuActStatus =
+                      app.studentAccountStatus ||
+                      stuInv?.status ||
+                      'pending_activation';
+
+                    return (
+                      <tr key={app.id} className="hover:bg-stone-50/70">
+                        <td className="py-3 px-4">
+                          <div className="font-mono font-bold text-[#0B3B2E]">
+                            {app.assignedAdmissionNo || linkedStu?.admissionNo || '—'}
+                          </div>
+                          <div className="font-semibold text-slate-900">
+                            {app.applicantNameBn}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {app.requestedClass}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-900">
+                            {app.guardianName} ({app.guardianRelation})
+                          </div>
+                          <div className="font-mono text-[11px] text-slate-600">
+                            {app.guardianPhone || '—'}
+                          </div>
+                          {app.guardianEmail && (
+                            <div className="font-mono text-[11px] text-slate-500">
+                              {app.guardianEmail}
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-semibold text-slate-800">{methodLabel}</div>
+                          <span
+                            className={`mt-1 inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              verStatus === 'verified'
+                                ? 'bg-emerald-100 text-emerald-900'
+                                : 'bg-amber-100 text-amber-900'
+                            }`}
+                          >
+                            {verStatus === 'verified'
+                              ? 'Verified (যাচাইকৃত)'
+                              : 'Pending Verification (অপেক্ষমাণ)'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 space-y-1">
+                          <div>
+                            <span className="text-slate-500">অভিভাবক: </span>
+                            <span className="font-mono font-semibold text-slate-800">
+                              {grdActStatus}
+                            </span>
+                            {grdInv?.invitationCode && (
+                              <span className="ms-1 font-mono text-[10px] text-emerald-800">
+                                ({grdInv.invitationCode})
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            <span className="text-slate-500">শিক্ষার্থী: </span>
+                            <span className="font-mono font-semibold text-slate-800">
+                              {stuActStatus}
+                            </span>
+                            {stuInv?.invitationCode && (
+                              <span className="ms-1 font-mono text-[10px] text-emerald-800">
+                                ({stuInv.invitationCode})
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <div className="font-mono text-[11px] text-slate-500 mb-1.5">
+                            অনুমোদন: {app.reviewedDate || app.submittedDate}
+                          </div>
+                          {isAdmin && onResendOrRecoverInvitation && (
+                            <div className="flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const res = await onResendOrRecoverInvitation(
+                                    app.id,
+                                    'guardian'
+                                  );
+                                  setRecoveryFeedback(res.messageBn);
+                                }}
+                                className="px-2 py-1 rounded bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-[10px] font-bold text-emerald-900 cursor-pointer"
+                              >
+                                অভিভাবক ভেরিফিকেশন পুনঃপ্রেরণ
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const res = await onResendOrRecoverInvitation(
+                                    app.id,
+                                    'student'
+                                  );
+                                  setRecoveryFeedback(res.messageBn);
+                                }}
+                                className="px-2 py-1 rounded bg-amber-50 hover:bg-amber-100 border border-amber-300 text-[10px] font-bold text-amber-900 cursor-pointer"
+                              >
+                                স্টুডেন্ট কোড রিকভারি
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+              )}
             </tbody>
           </table>
         </div>

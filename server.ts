@@ -7,6 +7,7 @@ import {
   inspectFirebaseAdminEnv,
   executeServerSuperAdminBootstrap,
 } from './src/server/superAdminBootstrapServer';
+import { executeResolveLoginIdentifier } from './src/server/studentAuthResolverServer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,6 +17,28 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json({ limit: '1mb' }));
+
+  // Trusted Server-Side Student ID & Guardian Login Identifier Resolver (with anti-enumeration & rate limiting)
+  const handleResolveLogin: express.RequestHandler = (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    const forwarded = req.headers['x-forwarded-for'];
+    const clientIp =
+      (Array.isArray(forwarded) ? forwarded[0] : forwarded)?.split(',')[0]?.trim() ||
+      req.ip ||
+      'local-client';
+
+    const result = executeResolveLoginIdentifier(
+      {
+        identifier: String(req.body?.identifier || ''),
+        loginMode: req.body?.loginMode,
+      },
+      clientIp
+    );
+    res.status(result.statusCode).json(result.body);
+  };
+
+  app.post('/api/auth/resolve-login', handleResolveLogin);
+  app.post('/api/resolve-login', handleResolveLogin);
 
   // Trusted Server-Side Super Admin Bootstrap Endpoint
   // - GET /api/bootstrap-super-admin: Safe readiness diagnostic (never exposes private keys or secret values)

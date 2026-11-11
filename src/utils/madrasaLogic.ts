@@ -12,6 +12,7 @@ import type {
   ExamWorkflowStatus,
   FeeInvoice,
   GradingPolicyConfig,
+  InstitutionSettings,
   InvitationTargetRole,
   Language,
   ModuleId,
@@ -29,6 +30,7 @@ export const ID_REGEX = /^[a-zA-Z0-9_\-]+$/;
 const ROLE_MODULE_ACCESS: Record<UserRole, ModuleId[]> = {
   super_admin: [
     'dashboard',
+    'website_cms',
     'admissions',
     'students',
     'staff',
@@ -46,6 +48,7 @@ const ROLE_MODULE_ACCESS: Record<UserRole, ModuleId[]> = {
   ],
   muhtamim: [
     'dashboard',
+    'website_cms',
     'admissions',
     'students',
     'staff',
@@ -469,7 +472,69 @@ export function computeDepartmentChartMetrics(students: Student[]): DepartmentCh
   });
 }
 
-export type IdentifierKind = 'email' | 'student_id' | 'username' | 'invalid';
+export type IdentifierKind = 'email' | 'student_id' | 'phone' | 'username' | 'invalid';
+
+/**
+ * Normalizes a Bangladesh mobile number to international E.164 format (+8801XXXXXXXXX).
+ * Accepts +8801XXXXXXXXX, 8801XXXXXXXXX, 01XXXXXXXXX, and formatted variants with hyphens/spaces.
+ */
+export function normalizeBangladeshPhone(rawPhone: string): string {
+  const trimmed = (rawPhone || '').trim();
+  if (!trimmed) return '';
+  // Convert Bengali digits if any
+  const ascii = trimmed.replace(/[০-৯]/g, (d) => {
+    const idx = BENGALI_DIGITS.indexOf(d as (typeof BENGALI_DIGITS)[number]);
+    return idx >= 0 ? String(idx) : d;
+  });
+  const digitsOnly = ascii.replace(/\D/g, '');
+  if (digitsOnly.length === 11 && /^01[3-9]\d{8}$/.test(digitsOnly)) {
+    return `+88${digitsOnly}`;
+  }
+  if (digitsOnly.length === 13 && /^8801[3-9]\d{8}$/.test(digitsOnly)) {
+    return `+${digitsOnly}`;
+  }
+  if (digitsOnly.length === 14 && /^008801[3-9]\d{8}$/.test(digitsOnly)) {
+    return `+${digitsOnly.slice(2)}`;
+  }
+  return ascii.replace(/[\s\-()]/g, '');
+}
+
+export function isValidBangladeshPhone(rawPhone: string): boolean {
+  const normalized = normalizeBangladeshPhone(rawPhone);
+  return /^\+8801[3-9]\d{8}$/.test(normalized);
+}
+
+export function isValidEmailAddress(rawEmail: string): boolean {
+  const trimmed = (rawEmail || '').trim();
+  if (!trimmed || trimmed.length > 160) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(trimmed);
+}
+
+/**
+ * Deterministically maps an official Student ID (e.g., UQCM-2026-101) to an internal
+ * synthetic Firebase Authentication email so Student ID + Self-Created Password works
+ * natively with Firebase Auth without storing plaintext passwords in Firestore.
+ */
+export function resolveCanonicalStudentAuthEmail(studentIdOrAdmissionNo: string): string {
+  const clean = (studentIdOrAdmissionNo || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9\-_]/g, '');
+  if (!clean) return '';
+  return `student.${clean.toLowerCase()}@auth.ummulquranmadrasa.edu.bd`;
+}
+
+/**
+ * Deterministically maps a verified Bangladesh Guardian phone (+8801XXXXXXXXX) to an
+ * internal synthetic Firebase Authentication email when the guardian logs in using
+ * Mobile Number + Self-Created Password.
+ */
+export function resolveCanonicalGuardianPhoneAuthEmail(rawPhone: string): string {
+  const normalized = normalizeBangladeshPhone(rawPhone);
+  const digits = normalized.replace(/\D/g, '');
+  if (!digits || digits.length < 10) return '';
+  return `guardian.${digits}@auth.ummulquranmadrasa.edu.bd`;
+}
 
 export function classifyLoginIdentifier(rawIdentifier: string): {
   kind: IdentifierKind;
@@ -488,11 +553,15 @@ export function classifyLoginIdentifier(rawIdentifier: string): {
     return { kind: 'invalid', normalized: trimmed };
   }
 
+  if (isValidBangladeshPhone(trimmed)) {
+    return { kind: 'phone', normalized: normalizeBangladeshPhone(trimmed) };
+  }
+
   const upper = trimmed.toUpperCase();
   if (
     /^UQCM[-_][A-Z0-9\-_]+$/i.test(trimmed) ||
     /^STU[-_][A-Z0-9\-_]+$/i.test(trimmed) ||
-    /^[0-9]{4,12}$/.test(trimmed)
+    /^[0-9]{4,10}$/.test(trimmed)
   ) {
     return { kind: 'student_id', normalized: upper };
   }
@@ -509,9 +578,9 @@ export function validateLoginInput(identifier: string, password: string): Valida
   const classified = classifyLoginIdentifier(identifier);
 
   if (!identifier || !identifier.trim()) {
-    errors.identifier = 'ইউজারনেম, স্টুডেন্ট আইডি অথবা ইমেইল আবশ্যক';
+    errors.identifier = 'স্টুডেন্ট আইডি, মোবাইল নম্বর (+880) অথবা ইমেইল আবশ্যক';
   } else if (classified.kind === 'invalid') {
-    errors.identifier = 'সঠিক ইউজারনেম, স্টুডেন্ট আইডি (যেমন UQCM-2026-101) অথবা ইমেইল দিন';
+    errors.identifier = 'সঠিক স্টুডেন্ট আইডি (যেমন UQCM-2026-101), মোবাইল (+8801...) অথবা ইমেইল দিন';
   }
 
   if (!password) {
@@ -548,12 +617,12 @@ export function validateRegistrationInput(input: RegistrationFormInput): Validat
 
   const phone = (input.phone || '').trim();
   if (!/^[0-9+\-\s()]{7,20}$/.test(phone)) {
-    errors.phone = 'সঠিক মোবাইল নম্বর প্রদান করুন (যেমন 01711-223344)';
+    errors.phone = 'সঠিক মোবাইল নম্বর প্রদান করুন (যেমন +8801711223344)';
   }
 
   const classified = classifyLoginIdentifier(input.identifier);
   if (classified.kind === 'invalid') {
-    errors.identifier = 'সঠিক স্টুডেন্ট আইডি, ইউজারনেম অথবা ইমেইল দিন';
+    errors.identifier = 'সঠিক স্টুডেন্ট আইডি, মোবাইল নম্বর অথবা ইমেইল দিন';
   }
 
   if (!input.password || input.password.length < 6) {
@@ -833,8 +902,33 @@ export function validateAdmissionStep(
     }
 
     const guardianPhone = (input.guardianPhone || '').trim();
-    if (!/^[0-9+\-\s()]{7,25}$/.test(guardianPhone)) {
-      errors.guardianPhone = 'অভিভাবকের সঠিক মোবাইল নম্বর আবশ্যক (যেমন 01711-223344)';
+    const guardianEmail = (input.guardianEmail || '').trim();
+    const hasPhone = Boolean(guardianPhone);
+    const hasEmail = Boolean(guardianEmail);
+
+    if (!hasPhone && !hasEmail) {
+      errors.guardianPhone =
+        'অভিভাবকের মোবাইল নম্বর (+880) অথবা ইমেইল ঠিকানা—কমপক্ষে যেকোনো একটি প্রদান করা আবশ্যক';
+    } else {
+      if (hasPhone && !isValidBangladeshPhone(guardianPhone)) {
+        errors.guardianPhone =
+          'বাংলাদেশের সঠিক মোবাইল নম্বর প্রদান করুন (যেমন +8801711223344 অথবা 01711-223344)';
+      }
+      if (hasEmail && !isValidEmailAddress(guardianEmail)) {
+        errors.guardianEmail = 'অভিভাবকের সঠিক ইমেইল ঠিকানা প্রদান করুন (যেমন guardian@example.com)';
+      }
+    }
+
+    if (input.guardianVerificationMethod === 'sms_otp') {
+      if (!hasPhone || !isValidBangladeshPhone(guardianPhone)) {
+        errors.guardianPhone =
+          'SMS OTP যাচাইকরণের জন্য বাংলাদেশের বৈধ মোবাইল নম্বর (+8801XXXXXXXXX) আবশ্যক';
+      }
+    } else if (input.guardianVerificationMethod === 'email_link') {
+      if (!hasEmail || !isValidEmailAddress(guardianEmail)) {
+        errors.guardianEmail =
+          'ইমেইল ভেরিফিকেশন লিংকের জন্য বৈধ ইমেইল ঠিকানা প্রদান করা আবশ্যক';
+      }
     }
   }
 
@@ -874,6 +968,69 @@ export function validateAdmissionStep(
   };
 }
 
+export function resolveGuardianVerificationMethod(
+  input: Pick<
+    AdmissionApplication,
+    'guardianPhone' | 'guardianEmail' | 'guardianVerificationMethod'
+  >
+): 'sms_otp' | 'email_link' {
+  const hasValidPhone = isValidBangladeshPhone(input.guardianPhone || '');
+  const hasValidEmail = isValidEmailAddress(input.guardianEmail || '');
+
+  if (input.guardianVerificationMethod === 'email_link' && hasValidEmail) {
+    return 'email_link';
+  }
+  if (input.guardianVerificationMethod === 'sms_otp' && hasValidPhone) {
+    return 'sms_otp';
+  }
+  if (hasValidPhone) {
+    return 'sms_otp';
+  }
+  if (hasValidEmail) {
+    return 'email_link';
+  }
+  return input.guardianVerificationMethod || 'sms_otp';
+}
+
+/**
+ * Finds an existing guardian UserProfile by UID, normalized Bangladesh phone, or email
+ * so multiple children under one guardian link to the same guardian identity without duplication.
+ */
+export function findExistingGuardianUser(
+  users: UserProfile[],
+  guardianPhone: string,
+  guardianEmail: string,
+  preferredUid?: string
+): UserProfile | null {
+  const cleanUid = (preferredUid || '').trim();
+  const normPhone = normalizeBangladeshPhone(guardianPhone || '');
+  const normEmail = (guardianEmail || '').trim().toLowerCase();
+  const syntheticPhoneEmail = normPhone ? resolveCanonicalGuardianPhoneAuthEmail(normPhone) : '';
+
+  const guardians = users.filter((u) => u.role === 'guardian' && !u.isDemoRecord);
+
+  if (cleanUid) {
+    const byUid = guardians.find((u) => u.uid === cleanUid || u.id === cleanUid);
+    if (byUid) return byUid;
+  }
+
+  if (normPhone) {
+    const byPhone = guardians.find(
+      (u) =>
+        normalizeBangladeshPhone(u.phone || '') === normPhone ||
+        (syntheticPhoneEmail && (u.email || '').trim().toLowerCase() === syntheticPhoneEmail)
+    );
+    if (byPhone) return byPhone;
+  }
+
+  if (normEmail) {
+    const byEmail = guardians.find((u) => (u.email || '').trim().toLowerCase() === normEmail);
+    if (byEmail) return byEmail;
+  }
+
+  return null;
+}
+
 export function isDuplicateAdmissionSubmission(
   existingApps: AdmissionApplication[],
   candidate: Pick<
@@ -883,7 +1040,7 @@ export function isDuplicateAdmissionSubmission(
 ): boolean {
   const normName = (candidate.nameEn || '').trim().toLowerCase();
   const normDob = (candidate.dateOfBirth || '').trim();
-  const normPhone = (candidate.guardianPhone || '').replace(/[\s\-()]/g, '');
+  const normPhone = normalizeBangladeshPhone(candidate.guardianPhone || '');
   const normSession = (candidate.academicSession || '').trim().toLowerCase();
 
   if (!normName || !normDob || !normPhone) return false;
@@ -893,7 +1050,7 @@ export function isDuplicateAdmissionSubmission(
     return (
       app.nameEn.trim().toLowerCase() === normName &&
       app.dateOfBirth.trim() === normDob &&
-      app.guardianPhone.replace(/[\s\-()]/g, '') === normPhone &&
+      normalizeBangladeshPhone(app.guardianPhone || '') === normPhone &&
       app.academicSession.trim().toLowerCase() === normSession
     );
   });
@@ -1006,6 +1163,7 @@ export function buildProvisionedStudentFromApplication(
   ).trim();
 
   const todayIso = new Date().toISOString().slice(0, 10);
+  const normalizedGuardianPhone = normalizeBangladeshPhone(app.guardianPhone) || app.guardianPhone.trim();
 
   const studentRecord: Student = {
     id: canonicalId,
@@ -1020,7 +1178,7 @@ export function buildProvisionedStudentFromApplication(
     bloodGroup: (app.bloodGroup || 'O+').trim(),
     admissionDate: existingMatch?.admissionDate || todayIso,
     guardianName: app.guardianName.trim(),
-    guardianPhone: app.guardianPhone.trim(),
+    guardianPhone: normalizedGuardianPhone || app.guardianEmail.trim(),
     guardianRelation: app.guardianRelation.trim(),
     guardianUid: resolvedGuardianUid,
     ...(resolvedStudentUid ? { studentUid: resolvedStudentUid } : {}),
@@ -1067,6 +1225,7 @@ export function verifyPublicApplicationLookup(
   const appPhoneDigits = (match.guardianPhone || '').replace(/\D/g, '');
   const fatherPhoneDigits = (match.fatherPhone || '').replace(/\D/g, '');
   const dobTrimmed = (match.dateOfBirth || '').trim();
+  const emailTrimmed = (match.guardianEmail || '').trim().toLowerCase();
 
   const phoneMatches =
     verifyDigits.length >= 6 &&
@@ -1074,8 +1233,9 @@ export function verifyPublicApplicationLookup(
       (fatherPhoneDigits.length >= 6 && fatherPhoneDigits.endsWith(verifyDigits.slice(-6))));
 
   const dobMatches = dobTrimmed.length >= 8 && dobTrimmed === cleanVerify;
+  const emailMatches = Boolean(emailTrimmed) && emailTrimmed === cleanVerify.toLowerCase();
 
-  if (!phoneMatches && !dobMatches) {
+  if (!phoneMatches && !dobMatches && !emailMatches) {
     return null;
   }
 
@@ -1107,6 +1267,7 @@ export function buildAccountProvisioningPackage(
   reusedExisting: boolean;
 } {
   const todayIso = new Date().toISOString().slice(0, 10);
+  const defaultExpiryIso = new Date(Date.now() + 14 * 86400 * 1000).toISOString().slice(0, 10);
   const stuInvId = `inv-stu-${student.id}`;
   const grdInvId = `inv-grd-${student.id}`;
 
@@ -1124,6 +1285,9 @@ export function buildAccountProvisioningPackage(
         (inv.studentId === student.id || inv.applicationId === app.id))
   );
 
+  const normalizedPhone = normalizeBangladeshPhone(student.guardianPhone) || student.guardianPhone;
+  const resolvedVerifyMethod = resolveGuardianVerificationMethod(app);
+
   const stuSuffix = computeDeterministicTokenSuffix(`STU:${student.id}:${student.admissionNo}`);
   const stuCode =
     existingStuInv?.invitationCode ||
@@ -1138,8 +1302,11 @@ export function buildAccountProvisioningPackage(
     admissionNo: student.admissionNo,
     studentNameBn: student.nameBn,
     recipientName: student.nameBn,
-    recipientPhone: student.guardianPhone,
-    recipientEmail: (app.applicantEmail || '').trim(),
+    recipientPhone: normalizedPhone,
+    recipientEmail: (
+      app.applicantEmail ||
+      resolveCanonicalStudentAuthEmail(student.admissionNo)
+    ).trim(),
     activationUrl: `${baseUrl}/?activate=${encodeURIComponent(stuCode)}`,
     // Preserve 'activated' status if already redeemed on retry
     status: existingStuInv?.status === 'activated' ? 'activated' : 'pending_activation',
@@ -1147,6 +1314,7 @@ export function buildAccountProvisioningPackage(
     requiresPasswordChangeOnFirstLogin: false,
     issuedByUid: existingStuInv?.issuedByUid || issuedByUid,
     issuedAt: existingStuInv?.issuedAt || todayIso,
+    expiresAt: existingStuInv?.expiresAt || defaultExpiryIso,
     redeemedByUid: existingStuInv?.redeemedByUid || '',
     redeemedAt: existingStuInv?.redeemedAt || '',
     authorId: existingStuInv?.authorId || issuedByUid,
@@ -1155,10 +1323,13 @@ export function buildAccountProvisioningPackage(
 
   let guardianInvitation: AccountInvitation | null = null;
   if (app.requestGuardianAccount !== false) {
-    const grdSuffix = computeDeterministicTokenSuffix(`GRD:${student.id}:${student.guardianPhone}`);
+    const grdSuffix = computeDeterministicTokenSuffix(`GRD:${student.id}:${normalizedPhone || app.guardianEmail}`);
     const grdCode =
       existingGrdInv?.invitationCode ||
       `ACT-GRD-${student.admissionNo.toUpperCase()}-${grdSuffix}`;
+
+    const grdStatus =
+      existingGrdInv?.status === 'activated' ? 'activated' : 'pending_activation';
 
     guardianInvitation = {
       id: existingGrdInv?.id || grdInvId,
@@ -1169,14 +1340,22 @@ export function buildAccountProvisioningPackage(
       admissionNo: student.admissionNo,
       studentNameBn: student.nameBn,
       recipientName: student.guardianName,
-      recipientPhone: student.guardianPhone,
+      recipientPhone: normalizedPhone,
       recipientEmail: (app.guardianEmail || '').trim(),
       activationUrl: `${baseUrl}/?activate=${encodeURIComponent(grdCode)}`,
-      status: existingGrdInv?.status === 'activated' ? 'activated' : 'pending_activation',
+      status: grdStatus,
       provisioningMode: 'single_use_activation_link',
       requiresPasswordChangeOnFirstLogin: false,
+      verificationMethod: existingGrdInv?.verificationMethod || resolvedVerifyMethod,
+      verificationStatus:
+        grdStatus === 'activated'
+          ? 'verified'
+          : existingGrdInv?.verificationStatus ||
+            app.guardianVerificationStatus ||
+            'pending_verification',
       issuedByUid: existingGrdInv?.issuedByUid || issuedByUid,
       issuedAt: existingGrdInv?.issuedAt || todayIso,
+      expiresAt: existingGrdInv?.expiresAt || defaultExpiryIso,
       redeemedByUid: existingGrdInv?.redeemedByUid || '',
       redeemedAt: existingGrdInv?.redeemedAt || '',
       authorId: existingGrdInv?.authorId || issuedByUid,
@@ -1191,14 +1370,109 @@ export function buildAccountProvisioningPackage(
   };
 }
 
+export function canActivateStudentAccount(
+  studentInvitationOrApp:
+    | Pick<AccountInvitation, 'applicationId' | 'studentId' | 'targetRole'>
+    | Pick<
+        AdmissionApplication,
+        'id' | 'status' | 'requestGuardianAccount' | 'guardianVerificationStatus' | 'guardianUid'
+      >,
+  allInvitationsOrGuardianVerified: AccountInvitation[] | boolean,
+  applications: Pick<
+    AdmissionApplication,
+    'id' | 'status' | 'requestGuardianAccount' | 'guardianVerificationStatus' | 'guardianUid'
+  >[] = []
+): {
+  allowed: boolean;
+  reasonBn?: string;
+  reasonEn?: string;
+} {
+  if (typeof allInvitationsOrGuardianVerified === 'boolean') {
+    const app = studentInvitationOrApp as Pick<
+      AdmissionApplication,
+      'id' | 'status' | 'requestGuardianAccount' | 'guardianVerificationStatus' | 'guardianUid'
+    >;
+    if (app.status !== 'approved') {
+      return {
+        allowed: false,
+        reasonBn: 'ভর্তি আবেদন চূড়ান্ত অনুমোদনের পূর্বে শিক্ষার্থী অ্যাকাউন্ট সক্রিয় করা যাবে না।',
+        reasonEn: 'Student account cannot be activated before admission approval.',
+      };
+    }
+    if (app.requestGuardianAccount && !allInvitationsOrGuardianVerified) {
+      return {
+        allowed: false,
+        reasonBn:
+          'শিক্ষার্থী অ্যাকাউন্ট সক্রিয় করার পূর্বে অভিভাবকের অ্যাকাউন্ট যাচাইকরণ (Guardian Verification) সম্পন্ন হওয়া আবশ্যক।',
+        reasonEn:
+          'Guardian verification must be completed before the student account can be activated.',
+      };
+    }
+    return { allowed: true };
+  }
+
+  const studentInvitation = studentInvitationOrApp as Pick<
+    AccountInvitation,
+    'applicationId' | 'studentId' | 'targetRole'
+  >;
+  const allInvitations = allInvitationsOrGuardianVerified;
+
+  if (studentInvitation.targetRole !== 'student') {
+    return { allowed: true };
+  }
+
+  const matchedApp = applications.find((a) => a.id === studentInvitation.applicationId);
+  if (matchedApp && matchedApp.status !== 'approved') {
+    return {
+      allowed: false,
+      reasonBn: 'ভর্তি আবেদন চূড়ান্ত অনুমোদনের পূর্বে শিক্ষার্থী অ্যাকাউন্ট সক্রিয় করা যাবে না।',
+      reasonEn: 'Student account cannot be activated before admission approval.',
+    };
+  }
+
+  const guardianInv = allInvitations.find(
+    (inv) =>
+      inv.targetRole === 'guardian' &&
+      ((studentInvitation.applicationId && inv.applicationId === studentInvitation.applicationId) ||
+        (studentInvitation.studentId && inv.studentId === studentInvitation.studentId))
+  );
+
+  // If a guardian invitation exists for this student, guardian verification/activation must be completed first
+  if (guardianInv) {
+    const isGuardianVerified =
+      guardianInv.status === 'activated' ||
+      guardianInv.verificationStatus === 'verified' ||
+      matchedApp?.guardianVerificationStatus === 'verified' ||
+      Boolean(matchedApp?.guardianUid);
+
+    if (!isGuardianVerified) {
+      return {
+        allowed: false,
+        reasonBn:
+          'শিক্ষার্থী অ্যাকাউন্ট সক্রিয় করার পূর্বে অভিভাবকের অ্যাকাউন্ট যাচাইকরণ (Guardian Verification) সম্পন্ন হওয়া আবশ্যক।',
+        reasonEn:
+          'Guardian verification must be completed before the student account can be activated.',
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
 export function validateAndRedeemActivationInvitation(
   invitations: AccountInvitation[],
   input: {
     invitationCode: string;
     verificationPhoneOrAdmissionNo: string;
     chosenPassword: string;
+    confirmPassword?: string;
     redeemerUid: string;
     referenceDateIso?: string;
+    requireGuardianVerified?: boolean;
+    applications?: Pick<
+      AdmissionApplication,
+      'id' | 'status' | 'requestGuardianAccount' | 'guardianVerificationStatus' | 'guardianUid'
+    >[];
   }
 ): {
   ok: boolean;
@@ -1260,12 +1534,30 @@ export function validateAndRedeemActivationInvitation(
     };
   }
 
+  if (input.requireGuardianVerified && target.targetRole === 'student') {
+    const prereq = canActivateStudentAccount(
+      target,
+      invitations,
+      input.applications || []
+    );
+    if (!prereq.allowed) {
+      return {
+        ok: false,
+        errorBn: prereq.reasonBn,
+        errorEn: prereq.reasonEn,
+      };
+    }
+  }
+
   const verifyDigits = cleanVerify.replace(/\D/g, '');
   const targetPhoneDigits = (target.recipientPhone || '').replace(/\D/g, '');
   const phoneMatches =
     verifyDigits.length >= 6 &&
     targetPhoneDigits.length >= 6 &&
     targetPhoneDigits.endsWith(verifyDigits.slice(-6));
+  const emailMatches =
+    Boolean(target.recipientEmail) &&
+    cleanVerify.toLowerCase() === target.recipientEmail.trim().toLowerCase();
   const admissionMatches =
     Boolean(target.admissionNo) &&
     cleanVerify.toUpperCase() === target.admissionNo.trim().toUpperCase();
@@ -1273,13 +1565,13 @@ export function validateAndRedeemActivationInvitation(
     Boolean(target.employeeCode) &&
     cleanVerify.toUpperCase() === (target.employeeCode || '').trim().toUpperCase();
 
-  if (!phoneMatches && !admissionMatches && !employeeCodeMatches) {
+  if (!phoneMatches && !emailMatches && !admissionMatches && !employeeCodeMatches) {
     return {
       ok: false,
       errorBn:
-        'যাচাইকরণ সফল হয়নি। নিবন্ধিত মোবাইল নম্বর (কমপক্ষে শেষ ৬ ডিজিট) অথবা অফিশিয়াল স্টুডেন্ট / স্টাফ আইডি সঠিকভাবে দিন।',
+        'যাচাইকরণ সফল হয়নি। নিবন্ধিত মোবাইল নম্বর (+880...), ইমেইল অথবা অফিশিয়াল স্টুডেন্ট / স্টাফ আইডি সঠিকভাবে দিন।',
       errorEn:
-        'Verification failed. Please provide the registered mobile number or official Student / Staff ID.',
+        'Verification failed. Please provide the registered mobile number, email, or official Student / Staff ID.',
     };
   }
 
@@ -1291,10 +1583,24 @@ export function validateAndRedeemActivationInvitation(
     };
   }
 
+  if (input.confirmPassword !== undefined && input.confirmPassword !== password) {
+    return {
+      ok: false,
+      errorBn: 'নতুন পাসওয়ার্ড এবং নিশ্চিতকরণ পাসওয়ার্ড (Confirm Password) একই হতে হবে।',
+      errorEn: 'Password and confirmation password must match.',
+    };
+  }
+
   const fallbackId = target.staffId || target.studentId || 'account';
   const updatedInvitation: AccountInvitation = {
     ...target,
     status: 'activated',
+    ...(target.targetRole === 'guardian'
+      ? {
+          verificationStatus: 'verified',
+          verifiedAt: todayIso,
+        }
+      : {}),
     redeemedByUid:
       (input.redeemerUid || '').trim() || `usr-${target.targetRole}-${fallbackId}`,
     redeemedAt: todayIso,
@@ -2749,19 +3055,7 @@ export function buildStaffAccountInvitation(
 // ============================================================================
 
 export function validateInstitutionSettings(
-  input: Partial<{
-    institutionNameBn: string;
-    institutionNameEn: string;
-    institutionNameAr: string;
-    academicYear: string;
-    hijriYear: string;
-    addressBn: string;
-    phone: string;
-    email: string;
-    defaultLanguage: Language;
-    activeDepartments: string;
-    gradingSystem: string;
-  }>
+  input: Partial<InstitutionSettings>
 ): ValidationResult & { errorBn?: string } {
   const errors: Record<string, string> = {};
 
@@ -2840,7 +3134,7 @@ export function buildCompleteInstitutionSettingsPayload(
       }
     | Partial<InstitutionSettings>,
   arg2?: Partial<InstitutionSettings>,
-  arg3?: string
+  arg3?: string | Partial<InstitutionSettings>
 ): {
   institutionNameBn: string;
   institutionNameEn: string;
@@ -2869,7 +3163,9 @@ export function buildCompleteInstitutionSettingsPayload(
     : arg2 || {};
   const fallbackAuthorId: string = isWrapperObject
     ? (arg1 as { authorId?: string }).authorId || 'usr-admin-1'
-    : arg3 || 'usr-admin-1';
+    : typeof arg3 === 'string'
+      ? arg3 || 'usr-admin-1'
+      : arg3?.authorId || 'usr-admin-1';
 
   const rawLang = updated.defaultLanguage || existing.defaultLanguage || 'bn';
   const safeLang: Language = ['bn', 'en', 'ar'].includes(rawLang) ? rawLang : 'bn';
@@ -2956,12 +3252,18 @@ export function encodeGradeWithWorkflowMeta(
         sectionName?: string;
       }>,
   workflowStatusArg?: ExamWorkflowStatus,
-  isAbsentArg?: boolean
+  isAbsentOrAuditArg?: boolean | unknown[]
 ): string {
   const isObj = typeof recOrGrade === 'object' && recOrGrade !== null;
   const baseGrade = isObj ? recOrGrade.grade || 'N/A' : String(recOrGrade || 'N/A');
   const wf = (isObj ? recOrGrade.workflowStatus : workflowStatusArg) || 'draft';
-  const isAbsent = Boolean(isObj ? recOrGrade.isAbsent : isAbsentArg);
+  const isAbsent = Boolean(
+    isObj
+      ? recOrGrade.isAbsent
+      : typeof isAbsentOrAuditArg === 'boolean'
+        ? isAbsentOrAuditArg
+        : false
+  );
   const remarks = isObj && recOrGrade.remarks ? recOrGrade.remarks.trim().slice(0, 18) : '';
   const gpaPoint = isObj && typeof recOrGrade.gpaPoint === 'number' ? recOrGrade.gpaPoint : undefined;
   const passMarks = isObj && typeof recOrGrade.passMarks === 'number' ? recOrGrade.passMarks : undefined;
@@ -3048,7 +3350,8 @@ export function decodeExamResultFromFirestore(
 }
 
 export function encodeExamSetupAsSettingsEnvelope(
-  setup: ExaminationSetup & {
+  setup: Omit<ExaminationSetup, 'subjects' | 'gradingPolicy'> & {
+    gradingPolicy?: Partial<GradingPolicyConfig>;
     subjects: Array<
       Partial<ExamSubjectConfig> & {
         fullMarks?: number;
@@ -3056,7 +3359,8 @@ export function encodeExamSetupAsSettingsEnvelope(
       }
     >;
   },
-  authorId: string
+  authorIdOrSettings: string | Partial<InstitutionSettings>,
+  maybeAuthorId?: string
 ): {
   institutionNameBn: string;
   institutionNameEn: string;
@@ -3071,6 +3375,10 @@ export function encodeExamSetupAsSettingsEnvelope(
   gradingSystem: string;
   authorId: string;
 } {
+  const resolvedAuthorId =
+    typeof authorIdOrSettings === 'string'
+      ? authorIdOrSettings
+      : maybeAuthorId || authorIdOrSettings?.authorId || 'usr-admin-1';
   const compactMeta = JSON.stringify({
     s: (setup.subjects || []).map((sub) => [
       sub.subjectCode || 'SUB-1',
@@ -3098,7 +3406,7 @@ export function encodeExamSetupAsSettingsEnvelope(
     defaultLanguage: 'bn',
     activeDepartments: (setup.department || 'hifz').trim().slice(0, 50),
     gradingSystem: compactMeta,
-    authorId: (setup.authorId || authorId || 'usr-admin-1').trim(),
+    authorId: (setup.authorId || resolvedAuthorId || 'usr-admin-1').trim(),
   };
 }
 
@@ -3162,6 +3470,9 @@ export function decodeExamSetupFromSettingsEnvelope(
     return null;
   }
 }
+
+export * from './websiteCmsLogic';
+
 
 
 

@@ -671,7 +671,7 @@ export function DashboardOverview({
                       {language === 'en' && notice.titleEn ? notice.titleEn : notice.titleBn}
                     </h3>
                     <div className="text-[11px] text-slate-500 font-mono tabular-nums mt-0.5">
-                      {notice.publishDate} · {notice.targetClass}
+                      {notice.publishDate} · {notice.targetClass.split(' ||CMS:')[0].trim()}
                     </div>
                   </div>
                 </div>

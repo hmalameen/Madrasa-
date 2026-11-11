@@ -29,6 +29,7 @@ import type {
   AdmissionStatus,
   DepartmentCode,
   GuardianLinkRequest,
+  GuardianVerificationMethod,
   Language,
   Role,
   Student,
@@ -39,6 +40,10 @@ import {
   canViewAdmissionApplication,
   generateAdmissionReferenceNo,
   isDuplicateAdmissionSubmission,
+  isValidBangladeshPhone,
+  isValidEmailAddress,
+  normalizeBangladeshPhone,
+  resolveGuardianVerificationMethod,
   validateAdmissionStep,
   verifyPublicApplicationLookup,
 } from '../../utils/madrasaLogic';
@@ -91,6 +96,10 @@ interface AdmissionsModuleProps {
     matchedStudentId: string,
     adminNotes: string
   ) => Promise<void>;
+  onResendOrRecoverInvitation?: (
+    application: AdmissionApplication,
+    targetRole: 'guardian' | 'student'
+  ) => Promise<void>;
 }
 
 const DRAFT_STORAGE_KEY = 'uqcm_admission_form_draft_v1';
@@ -115,6 +124,153 @@ const CLASS_PRESETS_BY_DEPT: Record<DepartmentCode, string[]> = {
   ],
 };
 
+const CLASS_PRESET_LABELS: Record<string, { en: string; ar: string }> = {
+  'হিফয প্রাথমিক (নাজেরা ও মাখরাজ)': {
+    en: 'Hifz Primary (Nazera & Makharij)',
+    ar: 'المرحلة التمهيدية للتحفيظ (التلاوة ومخارج الحروف)',
+  },
+  'হিফয শুনানি জামাত': {
+    en: 'Hifz Recitation & Memorization Class',
+    ar: 'حلقة التسميع والمراجعة للتحفيظ',
+  },
+  'হিফয তাকমীল (খতম বর্ষ)': {
+    en: 'Hifz Takmil (Completion Year)',
+    ar: 'مرحلة التكميل وختم القرآن الكريم',
+  },
+  'তাইসীরুল মুবতাদী (প্রস্তুতিমূলক)': {
+    en: 'Taysirul Mubtadi (Foundational Year)',
+    ar: 'تيسير المبتدي (السنة التمهيدية)',
+  },
+  'মিযান ও মুনশাইব (প্রথম বর্ষ)': {
+    en: 'Mizan & Munshaib (Year 1)',
+    ar: 'ميزان ومنشعب (السنة الأولى)',
+  },
+  'নাহবেমীর ও হেদায়াতুন্নাহু': {
+    en: 'Nahw Meer & Hidayatun Nahw',
+    ar: 'نحو مير وهداية النحو',
+  },
+  'কাফিয়া ও শরহে জামী': {
+    en: 'Kafiya & Sharh Jami',
+    ar: 'الكافية وشرح الجامي',
+  },
+  'ক্যাডেট পঞ্চম শ্রেণি (Class 5)': {
+    en: 'General Cadet — Class 5',
+    ar: 'قسم الكاديت العام — الصف الخامس',
+  },
+  'ক্যাডেট ষষ্ঠ শ্রেণি (Class 6)': {
+    en: 'General Cadet — Class 6',
+    ar: 'قسم الكاديت العام — الصف السادس',
+  },
+  'ক্যাডেট সপ্তম শ্রেণি (Class 7)': {
+    en: 'General Cadet — Class 7',
+    ar: 'قسم الكاديت العام — الصف السابع',
+  },
+  'ক্যাডেট অষ্টম শ্রেণি (Class 8)': {
+    en: 'General Cadet — Class 8',
+    ar: 'قسم الكاديت العام — الصف الثامن',
+  },
+};
+
+function localizeClassPreset(cls: string, lang: Language): string {
+  if (lang === 'bn') return cls;
+  const mapped = CLASS_PRESET_LABELS[cls];
+  if (!mapped) return cls;
+  return lang === 'ar' ? mapped.ar : mapped.en;
+}
+
+const STEP_ERROR_TRANSLATIONS: Record<string, { bn: string; en: string; ar: string }> = {
+  nameBn: {
+    bn: 'শিক্ষার্থীর পূর্ণ বাংলা নাম আবশ্যক (কমপক্ষে ২ অক্ষর)',
+    en: 'Student full name in Bengali is required (at least 2 characters)',
+    ar: 'يرجى إدخال اسم الطالب الكامل باللغة البنغالية (حرفان على الأقل)',
+  },
+  nameEn: {
+    bn: 'শিক্ষার্থীর পূর্ণ ইংরেজি নাম আবশ্যক (২–১২০ অক্ষর)',
+    en: 'Student full name in English is required (2–120 chars)',
+    ar: 'يرجى إدخال اسم الطالب الكامل باللغة الإنجليزية (٢ إلى ١٢٠ حرفاً)',
+  },
+  dateOfBirth: {
+    bn: 'জন্ম তারিখ প্রদান করা আবশ্যক',
+    en: 'Date of birth is required',
+    ar: 'يرجى إدخال تاريخ الميلاد',
+  },
+  presentAddress: {
+    bn: 'বর্তমান ঠিকানা প্রদান করা আবশ্যক',
+    en: 'Present address is required',
+    ar: 'يرجى إدخال العنوان الحالي',
+  },
+  birthRegNo: {
+    bn: 'জন্ম নিবন্ধন নম্বর সঠিক সংখ্যায় লিখুন',
+    en: 'Please enter a valid Birth Registration Number',
+    ar: 'يرجى إدخال رقم شهادة الميلاد بشكل صحيح',
+  },
+  fatherName: {
+    bn: 'পিতার নাম আবশ্যক',
+    en: "Father's full name is required",
+    ar: 'يرجى إدخال اسم الأب الكامل',
+  },
+  motherName: {
+    bn: 'মাতার নাম আবশ্যক',
+    en: "Mother's full name is required",
+    ar: 'يرجى إدخال اسم الأم الكامل',
+  },
+  guardianName: {
+    bn: 'প্রধান অভিভাবকের নাম আবশ্যক',
+    en: 'Primary guardian name is required',
+    ar: 'يرجى إدخال اسم ولي الأمر الرئيسي',
+  },
+  guardianRelation: {
+    bn: 'অভিভাবকের সাথে সম্পর্ক উল্লেখ করুন',
+    en: 'Please select guardian relationship',
+    ar: 'يرجى تحديد صلة القرابة لولي الأمر',
+  },
+  guardianPhone: {
+    bn: 'বাংলাদেশের সঠিক মোবাইল নম্বর প্রদান করুন (যেমন +8801711223344 অথবা 01711-223344)',
+    en: 'Please provide a valid Bangladesh mobile number (+8801XXXXXXXXX)',
+    ar: 'يرجى إدخال رقم جوال بنغلاديشي صحيح بصيغة (+8801XXXXXXXXX)',
+  },
+  guardianEmail: {
+    bn: 'অভিভাবকের সঠিক ইমেইল ঠিকানা প্রদান করুন (যেমন guardian@example.com)',
+    en: 'Please provide a valid guardian email address (e.g. guardian@example.com)',
+    ar: 'يرجى إدخال بريد إلكتروني صحيح لولي الأمر (مثال: guardian@example.com)',
+  },
+  department: {
+    bn: 'ভর্তির বিভাগ নির্বাচন আবশ্যক',
+    en: 'Please select an academic department',
+    ar: 'يرجى اختيار القسم الأكاديمي',
+  },
+  requestedClass: {
+    bn: 'ভর্তিচ্ছু জামাত বা শ্রেণি নির্বাচন আবশ্যক',
+    en: 'Please select the requested class / Jamat',
+    ar: 'يرجى اختيار الصف أو المرحلة الدراسية المطلوبة',
+  },
+  academicSession: {
+    bn: 'শিক্ষাবর্ষ উল্লেখ করা আবশ্যক',
+    en: 'Academic session is required',
+    ar: 'يرجى تحديد العام الدراسي',
+  },
+  residentialStatus: {
+    bn: 'আবাসিক অথবা অনাবাসিক ধরন নির্বাচন করুন',
+    en: 'Please select residential or day-scholar status',
+    ar: 'يرجى اختيار نوع الدراسة (سكن داخلي أو خارجي)',
+  },
+  consentAccepted: {
+    bn: 'আবেদন জমা দেওয়ার পূর্বে অঙ্গীকারনামা ও তথ্যের সত্যতা নিশ্চিতকরণ টিক দিন',
+    en: 'Please accept the declaration and institutional regulations before submitting',
+    ar: 'يرجى الموافقة على الإقرار واللوائح المؤسسية قبل إرسال الطلب',
+  },
+};
+
+function localizeValidationErrors(errorsObj: Record<string, string>, lang: Language): string[] {
+  return Object.entries(errorsObj).map(([key, fallbackMsg]) => {
+    const mapped = STEP_ERROR_TRANSLATIONS[key];
+    if (!mapped) return fallbackMsg;
+    if (lang === 'ar') return mapped.ar;
+    if (lang === 'en') return mapped.en;
+    return fallbackMsg;
+  });
+}
+
 export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
   lang,
   userRole,
@@ -126,12 +282,14 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
   applications,
   students,
   guardianLinkRequests,
+  accountInvitations = [],
   isPublicApplicantMode = false,
   onReturnToLogin,
   onSubmitApplication,
   onUpdateApplication,
   onApproveApplication,
   onReviewGuardianLinkRequest,
+  onResendOrRecoverInvitation,
 }) => {
   const isApprover = !isPublicApplicantMode && canApproveAdmissions(userRole);
   const isStaffViewer =
@@ -190,6 +348,8 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
     !isPublicApplicantMode && userRole === 'guardian' ? currentUserEmail : ''
   );
   const [requestGuardianAccount, setRequestGuardianAccount] = useState(true);
+  const [guardianVerificationMethod, setGuardianVerificationMethod] =
+    useState<GuardianVerificationMethod>('sms_otp');
 
   const [department, setDepartment] = useState<DepartmentCode>('hifz');
   const [requestedClass, setRequestedClass] = useState(
@@ -256,6 +416,12 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
         if (parsed.guardianRelation) setGuardianRelation(parsed.guardianRelation);
         if (parsed.guardianPhone) setGuardianPhone(parsed.guardianPhone);
         if (parsed.guardianEmail) setGuardianEmail(parsed.guardianEmail);
+        if (
+          parsed.guardianVerificationMethod === 'sms_otp' ||
+          parsed.guardianVerificationMethod === 'email_link'
+        ) {
+          setGuardianVerificationMethod(parsed.guardianVerificationMethod);
+        }
         if (parsed.department) setDepartment(parsed.department);
         if (parsed.requestedClass) setRequestedClass(parsed.requestedClass);
         if (parsed.previousInstitution)
@@ -326,9 +492,16 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
       motherPhone,
       guardianName,
       guardianRelation,
-      guardianPhone,
-      guardianEmail,
+      guardianPhone: guardianPhone.trim()
+        ? normalizeBangladeshPhone(guardianPhone)
+        : '',
+      guardianEmail: guardianEmail.trim(),
       requestGuardianAccount,
+      guardianVerificationMethod: resolveGuardianVerificationMethod({
+        guardianPhone,
+        guardianEmail,
+        guardianVerificationMethod,
+      }),
       department,
       requestedClass,
       academicSession,
@@ -360,6 +533,7 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
       guardianPhone,
       guardianEmail,
       requestGuardianAccount,
+      guardianVerificationMethod,
       department,
       requestedClass,
       academicSession,
@@ -379,7 +553,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
       setDraftSavedNotice(
         lang === 'bn'
           ? 'খসড়া আবেদন নিরাপদে সংরক্ষিত হয়েছে'
-          : 'Application draft saved locally'
+          : lang === 'ar'
+            ? 'تم حفظ مسودة الطلب محلياً بنجاح'
+            : 'Application draft saved locally'
       );
       setTimeout(() => setDraftSavedNotice(''), 3500);
     } catch {
@@ -390,7 +566,7 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
   const handleNextStep = () => {
     const check = validateAdmissionStep(step, currentFormPayload);
     if (!check.valid) {
-      setStepErrors(Object.values(check.errors));
+      setStepErrors(localizeValidationErrors(check.errors, lang));
       return;
     }
     setStepErrors([]);
@@ -412,7 +588,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 80);
     setDocumentName(safeName);
     setDocumentSummaryUrl(
-      `${safeName} (${Math.max(1, Math.round(file.size / 1024))} KB - যাচাইয়ের জন্য সংযুক্ত)`
+      lang === 'bn'
+        ? `${safeName} (${Math.max(1, Math.round(file.size / 1024))} KB - যাচাইয়ের জন্য সংযুক্ত)`
+        : lang === 'ar'
+          ? `${safeName} (${Math.max(1, Math.round(file.size / 1024))} KB - مرفق للمراجعة)`
+          : `${safeName} (${Math.max(1, Math.round(file.size / 1024))} KB - Attached for verification)`
     );
   };
 
@@ -450,7 +630,7 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
       const v = validateAdmissionStep(s, currentFormPayload);
       if (!v.valid) {
         setStep(s);
-        setStepErrors(Object.values(v.errors));
+        setStepErrors(localizeValidationErrors(v.errors, lang));
         return;
       }
     }
@@ -467,7 +647,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
       setStepErrors([
         lang === 'bn'
           ? 'এই শিক্ষার্থীর নাম, জন্ম তারিখ ও অভিভাবকের মোবাইল নম্বর দিয়ে বর্তমান শিক্ষাবর্ষে ইতোমধ্যে একটি আবেদন জমা রয়েছে। ট্র্যাকিং ট্যাব থেকে অবস্থা দেখুন।'
-          : 'An active admission application for this student already exists for this academic session.',
+          : lang === 'ar'
+            ? 'يوجد طلب قبول نشط مسجل بالفعل لهذا الطالب في العام الدراسي الحالي. يرجى متابعة الحالة من تبويب تتبع الطلب.'
+            : 'An active admission application for this student already exists for this academic session.',
       ]);
       return;
     }
@@ -562,7 +744,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
       setStepErrors([
         lang === 'bn'
           ? 'আবেদন জমা দিতে সমস্যা হয়েছে। অনুগ্রহ করে ইন্টারনেট সংযোগ যাচাই করে পুনরায় চেষ্টা করুন।'
-          : 'Failed to submit admission application. Please try again.',
+          : lang === 'ar'
+            ? 'تعذر إرسال طلب القبول. يرجى التحقق من الاتصال بالإنترنت والمحاولة مرة أخرى.'
+            : 'Failed to submit admission application. Please try again.',
       ]);
     } finally {
       setIsSubmitting(false);
@@ -591,6 +775,13 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
     setGuardianPhone(app.guardianPhone);
     setGuardianEmail(app.guardianEmail);
     setRequestGuardianAccount(app.requestGuardianAccount);
+    setGuardianVerificationMethod(
+      resolveGuardianVerificationMethod({
+        guardianPhone: app.guardianPhone,
+        guardianEmail: app.guardianEmail,
+        guardianVerificationMethod: app.guardianVerificationMethod,
+      })
+    );
     setDepartment(app.department);
     setRequestedClass(app.requestedClass);
     setAcademicSession(app.academicSession);
@@ -622,7 +813,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
         apps: res ? [res] : [],
         errorBn: res
           ? ''
-          : 'সঠিক আবেদন রেফারেন্স নম্বর এবং যাচাইকরণ তথ্য (অভিভাবকের মোবাইল নম্বর অথবা শিক্ষার্থীর জন্ম তারিখ YYYY-MM-DD) একসাথে প্রদান করুন।',
+          : lang === 'bn'
+            ? 'সঠিক আবেদন রেফারেন্স নম্বর এবং যাচাইকরণ তথ্য (অভিভাবকের মোবাইল নম্বর অথবা শিক্ষার্থীর জন্ম তারিখ YYYY-MM-DD) একসাথে প্রদান করুন।'
+            : lang === 'ar'
+              ? 'يرجى إدخال رقم مرجع الطلب الصحيح مع رقم جوال ولي الأمر أو تاريخ ميلاد الطالب (YYYY-MM-DD) معاً.'
+              : 'Please provide both a valid Application Reference Number and Guardian Mobile Number (or Student Date of Birth YYYY-MM-DD).',
       };
     }
 
@@ -651,6 +846,7 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
     isPublicApplicantMode,
     currentUid,
     userRole,
+    lang,
   ]);
 
   const trackedApplications = trackedLookupResult.apps;
@@ -776,35 +972,55 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-xs font-bold bg-[#166534]/12 text-[#166534] border border-[#166534]/25">
             <CheckCircle2 className="w-3.5 h-3.5" />
-            {lang === 'bn' ? 'অনুমোদিত (Approved)' : 'Approved'}
+            {lang === 'bn'
+              ? 'অনুমোদিত (Approved)'
+              : lang === 'ar'
+                ? 'معتمد (Approved)'
+                : 'Approved'}
           </span>
         );
       case 'needs_correction':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-xs font-bold bg-[#B45309]/15 text-[#B45309] border border-[#B45309]/30">
             <Edit3 className="w-3.5 h-3.5" />
-            {lang === 'bn' ? 'সংশোধন প্রয়োজন' : 'Needs Correction'}
+            {lang === 'bn'
+              ? 'সংশোধন প্রয়োজন'
+              : lang === 'ar'
+                ? 'يتطلب تصحيحاً'
+                : 'Needs Correction'}
           </span>
         );
       case 'under_review':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-xs font-bold bg-[#1E3A8A]/12 text-[#1E3A8A] border border-[#1E3A8A]/25">
             <Clock className="w-3.5 h-3.5" />
-            {lang === 'bn' ? 'যাচাই চলছে' : 'Under Review'}
+            {lang === 'bn'
+              ? 'যাচাই চলছে'
+              : lang === 'ar'
+                ? 'قيد المراجعة'
+                : 'Under Review'}
           </span>
         );
       case 'rejected':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-xs font-bold bg-[#991B1B]/12 text-[#991B1B] border border-[#991B1B]/25">
             <XCircle className="w-3.5 h-3.5" />
-            {lang === 'bn' ? 'বাতিল (Rejected)' : 'Rejected'}
+            {lang === 'bn'
+              ? 'বাতিল (Rejected)'
+              : lang === 'ar'
+                ? 'مرفوض (Rejected)'
+                : 'Rejected'}
           </span>
         );
       default:
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-xs font-bold bg-[#B8860B]/15 text-[#8A6306] border border-[#B8860B]/30">
             <Clock className="w-3.5 h-3.5" />
-            {lang === 'bn' ? 'বিবেচনাধীন (Pending)' : 'Pending'}
+            {lang === 'bn'
+              ? 'বিবেচনাধীন (Pending)'
+              : lang === 'ar'
+                ? 'قيد الانتظار (Pending)'
+                : 'Pending'}
           </span>
         );
     }
@@ -815,13 +1031,21 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-[#0F5132]/12 text-[#0F5132] border border-[#0F5132]/25">
           <Building2 className="w-3 h-3" />
-          {lang === 'bn' ? 'মুহতামিম সরাসরি এন্ট্রি' : 'Muhtamim Direct'}
+          {lang === 'bn'
+            ? 'মুহতামিম সরাসরি এন্ট্রি'
+            : lang === 'ar'
+              ? 'تسجيل مباشر من المهتمم'
+              : 'Muhtamim Direct'}
         </span>
       );
     }
     return (
       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-[#FBF9F4] text-[#6E675C] border border-[#E3DAC9]">
-        {lang === 'bn' ? 'অনলাইন আবেদন' : 'Online Application'}
+        {lang === 'bn'
+          ? 'অনলাইন আবেদন'
+          : lang === 'ar'
+            ? 'طلب عبر الإنترنت'
+            : 'Online Application'}
       </span>
     );
   };
@@ -845,10 +1069,14 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                 {isPublicApplicantMode
                   ? lang === 'bn'
                     ? `পাবলিক অনলাইন ভর্তি গেটওয়ে (লগইন নিষ্প্রয়োজন) · শিক্ষাবর্ষ ${formatNumber(academicYear, lang)}`
-                    : `Public Online Admission Gateway (No Login Required) · Session ${academicYear}`
+                    : lang === 'ar'
+                      ? `بوابة القبول الإلكتروني العامة (بدون تسجيل دخول) · العام الدراسي ${academicYear}`
+                      : `Public Online Admission Gateway (No Login Required) · Session ${academicYear}`
                   : lang === 'bn'
-                  ? `অনলাইন ভর্তি ও অনুমোদন গেটওয়ে · শিক্ষাবর্ষ ${formatNumber(academicYear, lang)}`
-                  : `Online Admission & Approval Gateway · Session ${academicYear}`}
+                    ? `অনলাইন ভর্তি ও অনুমোদন গেটওয়ে · শিক্ষাবর্ষ ${formatNumber(academicYear, lang)}`
+                    : lang === 'ar'
+                      ? `بوابة القبول والاعتماد الإلكتروني · العام الدراسي ${academicYear}`
+                      : `Online Admission & Approval Gateway · Session ${academicYear}`}
               </span>
             </div>
             <h2 className="text-xl sm:text-2xl font-bold text-[#1D1B18] mt-1">
@@ -861,7 +1089,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
             <p className="text-xs sm:text-sm text-[#6E675C] mt-1">
               {lang === 'bn'
                 ? '৪-ধাপের ভর্তি ফরম পূরণ, পাসপোর্ট ছবি ক্রপ ও সংযুক্তি, আবেদন ট্র্যাকিং এবং মুহতামিম অনুমোদনের মাধ্যমে স্বয়ংক্রিয় স্টুডেন্ট প্রোফাইল ও অভিভাবক সংযুক্তি।'
-                : 'Complete the 4-step admission wizard with 1:1 photo cropping, track application status, and provision verified student & guardian accounts.'}
+                : lang === 'ar'
+                  ? 'أكمل نموذج القبول من ٤ خطوات مع قص الصورة الشخصية ١:١، وتابع حالة الطلب، واحصل على حساب الطالب وولي الأمر بعد اعتماد المهتمم.'
+                  : 'Complete the 4-step admission wizard with 1:1 photo cropping, track application status, and provision verified student & guardian accounts.'}
             </p>
           </div>
 
@@ -873,10 +1103,12 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                 data-testid="public-adm-return-login-btn"
                 className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-[#FFFBEB] text-[#8A6306] border border-[#B8860B]/40 hover:bg-[#FEF3C7] cursor-pointer"
               >
-                <ArrowLeft className="w-4 h-4" />
+                <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
                 {lang === 'bn'
                   ? '২. বিদ্যমান ইউজার লগইন / অ্যাক্টিভেশন'
-                  : '2. Existing User Login'}
+                  : lang === 'ar'
+                    ? '٢. تسجيل دخول المستخدمين / التفعيل'
+                    : '2. Existing User Login'}
               </button>
             )}
 
@@ -894,7 +1126,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
               }`}
             >
               <UserPlus className="w-4 h-4" />
-              {lang === 'bn' ? 'নতুন ভর্তি ফরম' : 'Admission Form'}
+              {lang === 'bn'
+                ? 'নতুন ভর্তি ফরম'
+                : lang === 'ar'
+                  ? 'نموذج قبول جديد'
+                  : 'Admission Form'}
             </button>
 
             <button
@@ -908,7 +1144,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
               }`}
             >
               <Search className="w-4 h-4" />
-              {lang === 'bn' ? 'আবেদন ট্র্যাকিং' : 'Track Status'}
+              {lang === 'bn'
+                ? 'আবেদন ট্র্যাকিং'
+                : lang === 'ar'
+                  ? 'متابعة حالة الطلب'
+                  : 'Track Status'}
             </button>
 
             {isStaffViewer && (
@@ -924,7 +1164,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
               >
                 <ShieldCheck className="w-4 h-4" />
                 <span>
-                  {lang === 'bn' ? 'মুহতামিম অনুমোদন প্যানেল' : 'Approval Desk'}
+                  {lang === 'bn'
+                    ? 'মুহতামিম অনুমোদন প্যানেল'
+                    : lang === 'ar'
+                      ? 'لوحة اعتماد المهتمم'
+                      : 'Approval Desk'}
                 </span>
                 {pendingCount + pendingLinkCount > 0 && (
                   <span className="px-1.5 py-0.5 rounded-md text-[11px] bg-[#D4AF37] text-[#093023] font-extrabold">
@@ -953,10 +1197,14 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                   {submittedConfirmation.status === 'approved'
                     ? lang === 'bn'
                       ? 'মুহতামিম কর্তৃক সরাসরি ভর্তি অনুমোদিত ও প্রোফাইল তৈরি সম্পন্ন!'
-                      : 'Direct Entry Approved & Student Provisioned!'
+                      : lang === 'ar'
+                        ? 'تم اعتماد القبول المباشر وإنشاء ملف الطالب بنجاح!'
+                        : 'Direct Entry Approved & Student Provisioned!'
                     : lang === 'bn'
-                    ? 'ভর্তি আবেদন সফলভাবে গৃহীত হয়েছে'
-                    : 'Admission Application Received'}
+                      ? 'ভর্তি আবেদন সফলভাবে গৃহীত হয়েছে'
+                      : lang === 'ar'
+                        ? 'تم استلام طلب القبول بنجاح'
+                        : 'Admission Application Received'}
                 </span>
                 <h3 className="text-2xl font-bold text-[#1D1B18] mt-2">
                   {submittedConfirmation.nameBn} ({submittedConfirmation.nameEn})
@@ -965,19 +1213,25 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                   {submittedConfirmation.status === 'approved'
                     ? lang === 'bn'
                       ? `অফিশিয়াল শিক্ষার্থী আইডি ${submittedConfirmation.assignedAdmissionNo} বরাদ্দ করা হয়েছে এবং এককালীন অ্যাক্টিভেশন কোড প্রস্তুত হয়েছে।`
-                      : `Official Student ID ${submittedConfirmation.assignedAdmissionNo} assigned and single-use activation codes generated.`
+                      : lang === 'ar'
+                        ? `تم تخصيص رقم الطالب الرسمي ${submittedConfirmation.assignedAdmissionNo} وإصدار رموز التفعيل لمرة واحدة.`
+                        : `Official Student ID ${submittedConfirmation.assignedAdmissionNo} assigned and single-use activation codes generated.`
                     : lang === 'bn'
-                    ? 'আপনার আবেদনটি বর্তমানে বিবেচনাধীন (Pending) অবস্থায় রয়েছে। মুহতামিম মহোদয়ের যাচাই ও অনুমোদনের পরই কেবল শিক্ষার্থী অ্যাকাউন্ট সক্রিয় হবে।'
-                    : 'Your application is currently Pending review. The student account will be activated only after official verification and approval.'}
+                      ? 'আপনার আবেদনটি বর্তমানে বিবেচনাধীন (Pending) অবস্থায় রয়েছে। মুহতামিম মহোদয়ের যাচাই ও অনুমোদনের পরই কেবল শিক্ষার্থী অ্যাকাউন্ট সক্রিয় হবে।'
+                      : lang === 'ar'
+                        ? 'طلبك حالياً قيد المراجعة (Pending). سيتم تفعيل حساب الطالب فور المراجعة والاعتماد الرسمي من مكتب المهتمم.'
+                        : 'Your application is currently Pending review. The student account will be activated only after official verification and approval.'}
                 </p>
               </div>
 
-              <div className="rounded-2xl bg-[#FBF9F4] border border-[#E3DAC9] p-5 text-left grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="rounded-2xl bg-[#FBF9F4] border border-[#E3DAC9] p-5 text-start grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <p className="text-xs text-[#6E675C]">
                     {lang === 'bn'
                       ? 'আবেদন রেফারেন্স নম্বর (Reference No)'
-                      : 'Application Reference No'}
+                      : lang === 'ar'
+                        ? 'رقم مرجع الطلب (Reference No)'
+                        : 'Application Reference No'}
                   </p>
                   <p
                     className="text-lg font-mono font-extrabold text-[#0F5132] mt-0.5"
@@ -988,7 +1242,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                 </div>
                 <div>
                   <p className="text-xs text-[#6E675C]">
-                    {lang === 'bn' ? 'বর্তমান অবস্থা' : 'Current Status'}
+                    {lang === 'bn'
+                      ? 'বর্তমান অবস্থা'
+                      : lang === 'ar'
+                        ? 'الحالة الحالية'
+                        : 'Current Status'}
                   </p>
                   <div className="mt-1 flex items-center gap-2">
                     {statusBadge(submittedConfirmation.status)}
@@ -997,15 +1255,23 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                 </div>
                 <div>
                   <p className="text-xs text-[#6E675C]">
-                    {lang === 'bn' ? 'বিভাগ ও কাঙ্ক্ষিত জামাত' : 'Department & Class'}
+                    {lang === 'bn'
+                      ? 'বিভাগ ও কাঙ্ক্ষিত জামাত'
+                      : lang === 'ar'
+                        ? 'القسم والصف المطلوب'
+                        : 'Department & Class'}
                   </p>
                   <p className="text-sm font-bold text-[#1D1B18] mt-0.5">
-                    {submittedConfirmation.requestedClass}
+                    {localizeClassPreset(submittedConfirmation.requestedClass, lang)}
                   </p>
                 </div>
                 <div>
                   <p className="text-xs text-[#6E675C]">
-                    {lang === 'bn' ? 'অভিভাবকের মোবাইল' : 'Guardian Mobile'}
+                    {lang === 'bn'
+                      ? 'অভিভাবকের মোবাইল'
+                      : lang === 'ar'
+                        ? 'رقم جوال ولي الأمر'
+                        : 'Guardian Mobile'}
                   </p>
                   <p className="text-sm font-bold text-[#1D1B18] mt-0.5">
                     {submittedConfirmation.guardianPhone}
@@ -1014,7 +1280,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                 {submittedConfirmation.assignedAdmissionNo && (
                   <div>
                     <p className="text-xs text-[#6E675C]">
-                      {lang === 'bn' ? 'বরাদ্দকৃত স্টুডেন্ট আইডি' : 'Assigned Student ID'}
+                      {lang === 'bn'
+                        ? 'বরাদ্দকৃত স্টুডেন্ট আইডি'
+                        : lang === 'ar'
+                          ? 'رقم الطالب الرسمي المخصص'
+                          : 'Assigned Student ID'}
                     </p>
                     <p
                       className="text-sm font-mono font-extrabold text-[#166534] mt-0.5"
@@ -1029,7 +1299,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     <p className="text-xs text-[#6E675C]">
                       {lang === 'bn'
                         ? 'শিক্ষার্থী ও অভিভাবক এককালীন কোড'
-                        : 'Single-Use Activation Codes'}
+                        : lang === 'ar'
+                          ? 'رموز التفعيل لمرة واحدة'
+                          : 'Single-Use Activation Codes'}
                     </p>
                     <p className="text-xs font-mono font-bold text-[#0F5132] mt-0.5">
                       STU: {submittedConfirmation.studentInvitationCode}
@@ -1054,14 +1326,20 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                   <Search className="w-4 h-4" />
                   {lang === 'bn'
                     ? 'আবেদনের সর্বশেষ অবস্থা ট্র্যাক করুন'
-                    : 'Track Application Status'}
+                    : lang === 'ar'
+                      ? 'متابعة حالة الطلب'
+                      : 'Track Application Status'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setSubmittedConfirmation(null)}
                   className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold border border-[#E3DAC9] bg-white text-[#1D1B18] hover:bg-[#F3EFE6] cursor-pointer"
                 >
-                  {lang === 'bn' ? 'নতুন আরেকটি আবেদন করুন' : 'Submit Another'}
+                  {lang === 'bn'
+                    ? 'নতুন আরেকটি আবেদন করুন'
+                    : lang === 'ar'
+                      ? 'تقديم طلب آخر'
+                      : 'Submit Another'}
                 </button>
               </div>
             </div>
@@ -1075,12 +1353,16 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <ShieldCheck className="w-4 h-4" />
                       {lang === 'bn'
                         ? 'মুহতামিম সরাসরি নতুন ছাত্র এন্ট্রি ও তাৎক্ষণিক অনুমোদন মোড'
-                        : 'Muhtamim Direct Student Entry & Immediate Approval'}
+                        : lang === 'ar'
+                          ? 'وضع التسجيل المباشر والاعتماد الفوري من المهتمم'
+                          : 'Muhtamim Direct Student Entry & Immediate Approval'}
                     </p>
                     <p className="text-xs text-[#6E675C] mt-0.5">
                       {lang === 'bn'
                         ? 'সক্রিয় করলে মুহতামিম সরাসরি ছাত্রের তথ্য ও ছবি এন্ট্রি করে এক ধাপেই স্টুডেন্ট আইডি বরাদ্দ ও অনুমোদন সম্পন্ন করতে পারবেন।'
-                        : 'Enable to enter a new student directly, assign Student ID, and approve in one authorized step.'}
+                        : lang === 'ar'
+                          ? 'يتيح للمهتمم إدخال بيانات الطالب وصورته وتخصيص رقم الطالب واعتماده مباشرة في خطوة واحدة.'
+                          : 'Enable to enter a new student directly, assign Student ID, and approve in one authorized step.'}
                     </p>
                   </div>
                   <label className="inline-flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-white border border-[#0F5132]/30 text-xs font-bold text-[#0F5132] cursor-pointer shrink-0">
@@ -1097,7 +1379,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     <span>
                       {lang === 'bn'
                         ? 'সরাসরি এন্ট্রি ও তাৎক্ষণিক অনুমোদন'
-                        : 'Direct Entry & Approve'}
+                        : lang === 'ar'
+                          ? 'تسجيل مباشر واعتماد فوري'
+                          : 'Direct Entry & Approve'}
                     </span>
                   </label>
                 </div>
@@ -1109,10 +1393,16 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     <p className="text-xs font-bold text-[#B45309] uppercase tracking-wider">
                       {lang === 'bn'
                         ? `সংশোধন মোড সক্রিয় · রেফারেন্স: ${editingCorrectionApp.referenceNo}`
-                        : `Correction Resubmission Mode · Ref: ${editingCorrectionApp.referenceNo}`}
+                        : lang === 'ar'
+                          ? `وضع تصحيح الطلب · المرجع: ${editingCorrectionApp.referenceNo}`
+                          : `Correction Resubmission Mode · Ref: ${editingCorrectionApp.referenceNo}`}
                     </p>
                     <p className="text-xs text-[#1D1B18] mt-1 font-medium">
-                      {lang === 'bn' ? 'মুহতামিমের নির্দেশনা: ' : 'Admin Note: '}
+                      {lang === 'bn'
+                        ? 'মুহতামিমের নির্দেশনা: '
+                        : lang === 'ar'
+                          ? 'ملاحظات الإدارة: '
+                          : 'Admin Note: '}
                       {editingCorrectionApp.adminRemarks}
                     </p>
                   </div>
@@ -1121,7 +1411,7 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     onClick={resetForm}
                     className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-[#B45309]/30 bg-white text-[#B45309] shrink-0 cursor-pointer"
                   >
-                    {lang === 'bn' ? 'সংশোধন বাতিল' : 'Cancel Edit'}
+                    {lang === 'bn' ? 'সংশোধন বাতিল' : lang === 'ar' ? 'إلغاء التعديل' : 'Cancel Edit'}
                   </button>
                 </div>
               )}
@@ -1133,21 +1423,25 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     s: 1,
                     titleBn: '১. শিক্ষার্থীর তথ্য ও ছবি',
                     titleEn: '1. Student & Photo',
+                    titleAr: '١. بيانات الطالب والصورة',
                   },
                   {
                     s: 2,
                     titleBn: '২. মাতা-পিতা ও অভিভাবক',
                     titleEn: '2. Parent & Guardian',
+                    titleAr: '٢. الوالدان وولي الأمر',
                   },
                   {
                     s: 3,
                     titleBn: '৩. বিভাগ ও আবাসিক তথ্য',
                     titleEn: '3. Academic & Hostel',
+                    titleAr: '٣. القسم والسكن الداخلي',
                   },
                   {
                     s: 4,
                     titleBn: '৪. কাগজপত্র ও চূড়ান্ত যাচাই',
                     titleEn: '4. Documents & Review',
+                    titleAr: '٤. المستندات والمراجعة',
                   },
                 ].map((item) => {
                   const isActive = step === item.s;
@@ -1162,7 +1456,7 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                           setStep(item.s as 1 | 2 | 3 | 4);
                         }
                       }}
-                      className={`text-left p-3 rounded-xl border transition-all cursor-pointer ${
+                      className={`text-start p-3 rounded-xl border transition-all cursor-pointer ${
                         isActive
                           ? 'bg-[#0F5132]/8 border-[#0F5132] text-[#0F5132]'
                           : isDone
@@ -1172,7 +1466,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     >
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-bold">
-                          {lang === 'bn' ? item.titleBn : item.titleEn}
+                          {lang === 'bn'
+                            ? item.titleBn
+                            : lang === 'ar'
+                              ? item.titleAr
+                              : item.titleEn}
                         </span>
                         {isDone && <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />}
                       </div>
@@ -1190,7 +1488,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     <AlertCircle className="w-4 h-4 shrink-0" />
                     {lang === 'bn'
                       ? 'অনুগ্রহ করে নিচের তথ্যগুলো সংশোধন করুন:'
-                      : 'Please resolve the following fields:'}
+                      : lang === 'ar'
+                        ? 'يرجى استكمال أو تصحيح الحقول التالية:'
+                        : 'Please resolve the following fields:'}
                   </p>
                   <ul className="list-disc list-inside text-xs text-[#991B1B] space-y-0.5">
                     {stepErrors.map((err, idx) => (
@@ -1215,13 +1515,21 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'শিক্ষার্থীর পূর্ণ নাম (বাংলায়) *'
-                          : 'Student Full Name (Bengali) *'}
+                          : lang === 'ar'
+                            ? 'اسم الطالب الكامل (بالبنغالية) *'
+                            : 'Student Full Name (Bengali) *'}
                       </label>
                       <input
                         type="text"
                         value={nameBn}
                         onChange={(e) => setNameBn(e.target.value)}
-                        placeholder="যেমন: মুহাম্মাদ রায়হান মাহমুদ"
+                        placeholder={
+                          lang === 'bn'
+                            ? 'যেমন: মুহাম্মাদ রায়হান মাহমুদ'
+                            : lang === 'ar'
+                              ? 'مثال: মুহাম্মাদ রায়হান মাহমুদ'
+                              : 'e.g. মুহাম্মাদ রায়হান মাহমুদ'
+                        }
                         data-testid="adm-input-nameBn"
                         className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18] focus:outline-none focus:border-[#0F5132]"
                       />
@@ -1231,7 +1539,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'শিক্ষার্থীর পূর্ণ নাম (ইংরেজিতে) *'
-                          : 'Student Full Name (English) *'}
+                          : lang === 'ar'
+                            ? 'اسم الطالب الكامل (بالإنجليزية) *'
+                            : 'Student Full Name (English) *'}
                       </label>
                       <input
                         type="text"
@@ -1247,7 +1557,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'আরবি নাম (ঐচ্ছিক / Optional)'
-                          : 'Arabic Name (Optional)'}
+                          : lang === 'ar'
+                            ? 'الاسم باللغة العربية (اختياري)'
+                            : 'Arabic Name (Optional)'}
                       </label>
                       <input
                         type="text"
@@ -1263,7 +1575,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
-                        {lang === 'bn' ? 'জন্ম তারিখ *' : 'Date of Birth *'}
+                        {lang === 'bn'
+                          ? 'জন্ম তারিখ *'
+                          : lang === 'ar'
+                            ? 'تاريخ الميلاد *'
+                            : 'Date of Birth *'}
                       </label>
                       <input
                         type="date"
@@ -1275,7 +1591,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
 
                     <div>
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
-                        {lang === 'bn' ? 'লিঙ্গ (Gender)' : 'Gender'}
+                        {lang === 'bn'
+                          ? 'লিঙ্গ (Gender)'
+                          : lang === 'ar'
+                            ? 'الجنس'
+                            : 'Gender'}
                       </label>
                       <select
                         value={gender}
@@ -1285,10 +1605,10 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                       >
                         <option value="male">
-                          {lang === 'bn' ? 'ছাত্র (Male)' : 'Male'}
+                          {lang === 'bn' ? 'ছাত্র (Male)' : lang === 'ar' ? 'طالب (ذكر)' : 'Male'}
                         </option>
                         <option value="female">
-                          {lang === 'bn' ? 'ছাত্রী (Female)' : 'Female'}
+                          {lang === 'bn' ? 'ছাত্রী (Female)' : lang === 'ar' ? 'طالبة (أنثى)' : 'Female'}
                         </option>
                       </select>
                     </div>
@@ -1297,7 +1617,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'রক্তের গ্রুপ (ঐচ্ছিক)'
-                          : 'Blood Group (Optional)'}
+                          : lang === 'ar'
+                            ? 'فصيلة الدم (اختياري)'
+                            : 'Blood Group (Optional)'}
                       </label>
                       <select
                         value={bloodGroup}
@@ -1307,7 +1629,13 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         {['O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'জানা নেই'].map(
                           (bg) => (
                             <option key={bg} value={bg}>
-                              {bg}
+                              {bg === 'জানা নেই'
+                                ? lang === 'bn'
+                                  ? 'জানা নেই'
+                                  : lang === 'ar'
+                                    ? 'غير معروف'
+                                    : 'Unknown'
+                                : bg}
                             </option>
                           )
                         )}
@@ -1318,13 +1646,21 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'জন্ম নিবন্ধন নম্বর (ঐচ্ছিক)'
-                          : 'Birth Reg. No (Optional)'}
+                          : lang === 'ar'
+                            ? 'رقم شهادة الميلاد (اختياري)'
+                            : 'Birth Reg. No (Optional)'}
                       </label>
                       <input
                         type="text"
                         value={birthRegNo}
                         onChange={(e) => setBirthRegNo(e.target.value)}
-                        placeholder="১৭ ডিজিটের জন্ম নিবন্ধন নম্বর"
+                        placeholder={
+                          lang === 'bn'
+                            ? '১৭ ডিজিটের জন্ম নিবন্ধন নম্বর'
+                            : lang === 'ar'
+                              ? 'رقم شهادة الميلاد (١٧ رقماً)'
+                              : '17-digit Birth Registration No'
+                        }
                         className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                       />
                     </div>
@@ -1333,13 +1669,23 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
-                        {lang === 'bn' ? 'বর্তমান ঠিকানা *' : 'Present Address *'}
+                        {lang === 'bn'
+                          ? 'বর্তমান ঠিকানা *'
+                          : lang === 'ar'
+                            ? 'العنوان الحالي *'
+                            : 'Present Address *'}
                       </label>
                       <input
                         type="text"
                         value={presentAddress}
                         onChange={(e) => setPresentAddress(e.target.value)}
-                        placeholder="বাসা/রোড, সেক্টর/ইউনিয়ন, থানা ও জেলা"
+                        placeholder={
+                          lang === 'bn'
+                            ? 'বাসা/রোড, সেক্টর/ইউনিয়ন, থানা ও জেলা'
+                            : lang === 'ar'
+                              ? 'المنزل/الشارع، الحي، المنطقة والمدينة'
+                              : 'House/Road, Sector/Union, Thana & District'
+                        }
                         data-testid="adm-input-presentAddress"
                         className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                       />
@@ -1350,7 +1696,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <label className="block text-xs font-bold text-[#1D1B18]">
                           {lang === 'bn'
                             ? 'স্থায়ী ঠিকানা (ঐচ্ছিক)'
-                            : 'Permanent Address (Optional)'}
+                            : lang === 'ar'
+                              ? 'العنوان الدائم (اختياري)'
+                              : 'Permanent Address (Optional)'}
                         </label>
                         <button
                           type="button"
@@ -1359,14 +1707,22 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         >
                           {lang === 'bn'
                             ? 'বর্তমান ঠিকানার অনুরূপ'
-                            : 'Same as present'}
+                            : lang === 'ar'
+                              ? 'مطابق للعنوان الحالي'
+                              : 'Same as present'}
                         </button>
                       </div>
                       <input
                         type="text"
                         value={permanentAddress}
                         onChange={(e) => setPermanentAddress(e.target.value)}
-                        placeholder="গ্রাম, ডাকঘর, উপজেলা ও জেলা"
+                        placeholder={
+                          lang === 'bn'
+                            ? 'গ্রাম, ডাকঘর, উপজেলা ও জেলা'
+                            : lang === 'ar'
+                              ? 'القرية، مكتب البريد، المنطقة والمحافظة'
+                              : 'Village, Post Office, Upazila & District'
+                        }
                         className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                       />
                     </div>
@@ -1380,13 +1736,23 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
-                        {lang === 'bn' ? 'পিতার নাম *' : "Father's Name *"}
+                        {lang === 'bn'
+                          ? 'পিতার নাম *'
+                          : lang === 'ar'
+                            ? 'اسم الأب الكامل *'
+                            : "Father's Name *"}
                       </label>
                       <input
                         type="text"
                         value={fatherName}
                         onChange={(e) => setFatherName(e.target.value)}
-                        placeholder="পিতার পূর্ণ নাম"
+                        placeholder={
+                          lang === 'bn'
+                            ? 'পিতার পূর্ণ নাম'
+                            : lang === 'ar'
+                              ? 'الاسم الكامل للأب'
+                              : "Father's full name"
+                        }
                         data-testid="adm-input-fatherName"
                         className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                       />
@@ -1396,7 +1762,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'পিতার মোবাইল নম্বর (ঐচ্ছিক)'
-                          : "Father's Mobile (Optional)"}
+                          : lang === 'ar'
+                            ? 'رقم جوال الأب (اختياري)'
+                            : "Father's Mobile (Optional)"}
                       </label>
                       <input
                         type="tel"
@@ -1410,14 +1778,22 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     <div>
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
-                          ? 'মাতার নাম (ঐচ্ছিক)'
-                          : "Mother's Name (Optional)"}
+                          ? 'মাতার নাম *'
+                          : lang === 'ar'
+                            ? 'اسم الأم الكامل *'
+                            : "Mother's Name *"}
                       </label>
                       <input
                         type="text"
                         value={motherName}
                         onChange={(e) => setMotherName(e.target.value)}
-                        placeholder="মাতার পূর্ণ নাম"
+                        placeholder={
+                          lang === 'bn'
+                            ? 'মাতার পূর্ণ নাম'
+                            : lang === 'ar'
+                              ? 'الاسم الكامل للأم'
+                              : "Mother's full name"
+                        }
                         className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                       />
                     </div>
@@ -1426,7 +1802,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'মাতার মোবাইল নম্বর (ঐচ্ছিক)'
-                          : "Mother's Mobile (Optional)"}
+                          : lang === 'ar'
+                            ? 'رقم جوال الأم (اختياري)'
+                            : "Mother's Mobile (Optional)"}
                       </label>
                       <input
                         type="tel"
@@ -1443,7 +1821,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <p className="text-xs font-bold uppercase tracking-wider text-[#0F5132]">
                         {lang === 'bn'
                           ? 'প্রধান অভিভাবকের যোগাযোগ ও পোর্টাল সংযুক্তি'
-                          : 'Primary Guardian Contact & Portal Link'}
+                          : lang === 'ar'
+                            ? 'بيانات ولي الأمر الرئيسي وربط البوابة الإلكترونية'
+                            : 'Primary Guardian Contact & Portal Link'}
                       </p>
                       {fatherName && (
                         <button
@@ -1457,7 +1837,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         >
                           {lang === 'bn'
                             ? 'পিতাকেই প্রধান অভিভাবক হিসেবে নির্বাচন করুন'
-                            : 'Copy Father as Primary Guardian'}
+                            : lang === 'ar'
+                              ? 'اختيار الأب كولي أمر رئيسي'
+                              : 'Copy Father as Primary Guardian'}
                         </button>
                       )}
                     </div>
@@ -1467,13 +1849,21 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                           {lang === 'bn'
                             ? 'প্রধান অভিভাবকের নাম *'
-                            : 'Primary Guardian Name *'}
+                            : lang === 'ar'
+                              ? 'اسم ولي الأمر الرئيسي *'
+                              : 'Primary Guardian Name *'}
                         </label>
                         <input
                           type="text"
                           value={guardianName}
                           onChange={(e) => setGuardianName(e.target.value)}
-                          placeholder="অভিভাবকের নাম"
+                          placeholder={
+                            lang === 'bn'
+                              ? 'অভিভাবকের নাম'
+                              : lang === 'ar'
+                                ? 'اسم ولي الأمر'
+                                : 'Guardian full name'
+                          }
                           data-testid="adm-input-guardianName"
                           className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                         />
@@ -1481,56 +1871,221 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
 
                       <div>
                         <label className="block text-xs font-bold text-[#1D1B18] mb-1">
-                          {lang === 'bn' ? 'সম্পর্ক *' : 'Relationship *'}
+                          {lang === 'bn'
+                            ? 'সম্পর্ক *'
+                            : lang === 'ar'
+                              ? 'صلة القرابة *'
+                              : 'Relationship *'}
                         </label>
                         <select
                           value={guardianRelation}
                           onChange={(e) => setGuardianRelation(e.target.value)}
                           className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                         >
-                          <option value="পিতা (Father)">পিতা (Father)</option>
-                          <option value="মাতা (Mother)">মাতা (Mother)</option>
+                          <option value="পিতা (Father)">
+                            {lang === 'bn'
+                              ? 'পিতা (Father)'
+                              : lang === 'ar'
+                                ? 'الأب (Father)'
+                                : 'Father'}
+                          </option>
+                          <option value="মাতা (Mother)">
+                            {lang === 'bn'
+                              ? 'মাতা (Mother)'
+                              : lang === 'ar'
+                                ? 'الأم (Mother)'
+                                : 'Mother'}
+                          </option>
                           <option value="বড় ভাই (Elder Brother)">
-                            বড় ভাই (Elder Brother)
+                            {lang === 'bn'
+                              ? 'বড় ভাই (Elder Brother)'
+                              : lang === 'ar'
+                                ? 'الأخ الأكبر (Elder Brother)'
+                                : 'Elder Brother'}
                           </option>
                           <option value="চাচা / মামা (Uncle)">
-                            চাচা / মামা (Uncle)
+                            {lang === 'bn'
+                              ? 'চাচা / মামা (Uncle)'
+                              : lang === 'ar'
+                                ? 'العم / الخال (Uncle)'
+                                : 'Uncle'}
                           </option>
                           <option value="স্থানীয় অভিভাবক (Local Guardian)">
-                            স্থানীয় অভিভাবক (Local Guardian)
+                            {lang === 'bn'
+                              ? 'স্থানীয় অভিভাবক (Local Guardian)'
+                              : lang === 'ar'
+                                ? 'ولي أمر محلي (Local Guardian)'
+                                : 'Local Guardian'}
                           </option>
                         </select>
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-[#1D1B18] mb-1">
-                          {lang === 'bn'
-                            ? 'অভিভাবকের সচল মোবাইল নম্বর *'
-                            : 'Guardian Mobile Number *'}
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs font-bold text-[#1D1B18]">
+                            {lang === 'bn'
+                              ? 'অভিভাবকের মোবাইল নম্বর (+880) *'
+                              : lang === 'ar'
+                                ? 'رقم جوال ولي الأمر (+880) *'
+                                : 'Guardian Mobile (+880) *'}
+                          </label>
+                          {guardianPhone && isValidBangladeshPhone(guardianPhone) && (
+                            <span className="text-[10px] font-mono font-bold text-[#166534] bg-[#166534]/10 px-1.5 py-0.5 rounded">
+                              {normalizeBangladeshPhone(guardianPhone)}
+                            </span>
+                          )}
+                        </div>
                         <input
                           type="tel"
                           value={guardianPhone}
-                          onChange={(e) => setGuardianPhone(e.target.value)}
-                          placeholder="01711-XXXXXX"
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setGuardianPhone(val);
+                            if (val.trim() && !guardianEmail.trim()) {
+                              setGuardianVerificationMethod('sms_otp');
+                            }
+                          }}
+                          onBlur={() => {
+                            if (guardianPhone.trim() && isValidBangladeshPhone(guardianPhone)) {
+                              setGuardianPhone(normalizeBangladeshPhone(guardianPhone));
+                            }
+                          }}
+                          placeholder="+8801711223344"
                           data-testid="adm-input-guardianPhone"
-                          className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
+                          className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm font-mono text-[#1D1B18]"
                         />
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-[#1D1B18] mb-1">
-                          {lang === 'bn'
-                            ? 'অভিভাবকের ইমেইল (ঐচ্ছিক)'
-                            : 'Guardian Email (Optional)'}
-                        </label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs font-bold text-[#1D1B18]">
+                            {lang === 'bn'
+                              ? 'অভিভাবকের ইমেইল ঠিকানা'
+                              : lang === 'ar'
+                                ? 'البريد الإلكتروني لولي الأمر'
+                                : 'Guardian Email Address'}
+                          </label>
+                          {guardianEmail && isValidEmailAddress(guardianEmail) && (
+                            <span className="text-[10px] font-bold text-[#166534] bg-[#166534]/10 px-1.5 py-0.5 rounded">
+                              {lang === 'bn' ? 'সঠিক' : lang === 'ar' ? 'صحيح' : 'Valid'}
+                            </span>
+                          )}
+                        </div>
                         <input
                           type="email"
                           value={guardianEmail}
-                          onChange={(e) => setGuardianEmail(e.target.value)}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setGuardianEmail(val);
+                            if (val.trim() && !guardianPhone.trim()) {
+                              setGuardianVerificationMethod('email_link');
+                            }
+                          }}
                           placeholder="guardian@example.com"
+                          data-testid="adm-input-guardianEmail"
                           className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                         />
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-[#6E675C] mt-2">
+                      {lang === 'bn'
+                        ? '* অভিভাবককে মোবাইল নম্বর (+880 ফরম্যাট) অথবা ইমেইল ঠিকানা—কমপক্ষে যেকোনো একটি প্রদান করতে হবে। উভয়টি প্রদান করলে যেকোনো একটি যাচাইকরণ পদ্ধতি বেছে নেওয়া যাবে।'
+                        : lang === 'ar'
+                          ? '* يجب على ولي الأمر تقديم رقم الجوال (+880) أو البريد الإلكتروني على الأقل. وفي حال تقديم كليهما، يمكن اختيار طريقة تحقق واحدة أدناه.'
+                          : '* Guardian must provide at least one of Mobile Phone (+880) or Email Address. If both are provided, choose which one to verify below.'}
+                    </p>
+
+                    {/* Guardian Verification Method Selector (SMS OTP vs Email Verification Link) */}
+                    <div
+                      className="mt-4 p-4 rounded-xl bg-[#FFFDF8] border border-[#E3DAC9] space-y-3"
+                      data-testid="adm-guardian-verification-method-box"
+                    >
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                        <p className="text-xs font-bold text-[#0F5132]">
+                          {lang === 'bn'
+                            ? 'অভিভাবক অ্যাকাউন্ট যাচাইকরণ পদ্ধতি নির্বাচন করুন (Guardian Verification Method)'
+                            : lang === 'ar'
+                              ? 'اختر طريقة توثيق حساب ولي الأمر (Guardian Verification Method)'
+                              : 'Select Guardian Verification Method'}
+                        </p>
+                        <span className="text-[11px] font-semibold text-[#8A6306]">
+                          {lang === 'bn'
+                            ? 'শুধুমাত্র ১টি পদ্ধতি যাচাই করা আবশ্যক'
+                            : lang === 'ar'
+                              ? 'يكفي التحقق عبر طريقة واحدة فقط'
+                              : 'Only 1 verification method required'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <label
+                          onClick={() => setGuardianVerificationMethod('sms_otp')}
+                          data-testid="adm-verify-method-sms"
+                          className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                            guardianVerificationMethod === 'sms_otp'
+                              ? 'bg-[#0F5132]/8 border-[#0F5132] text-[#0F5132]'
+                              : 'bg-white border-[#E3DAC9] text-[#1D1B18] hover:bg-[#FBF9F4]'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="guardianVerificationMethod"
+                            checked={guardianVerificationMethod === 'sms_otp'}
+                            onChange={() => setGuardianVerificationMethod('sms_otp')}
+                            className="mt-0.5 w-4 h-4 accent-[#0F5132]"
+                          />
+                          <div className="text-xs">
+                            <p className="font-bold">
+                              {lang === 'bn'
+                                ? 'A. মোবাইল নম্বর — SMS OTP যাচাইকরণ'
+                                : lang === 'ar'
+                                  ? 'أ. رقم الجوال — التحقق عبر رمز SMS OTP'
+                                  : 'A. Mobile Number — SMS OTP Verification'}
+                            </p>
+                            <p className="text-[11px] text-[#6E675C] mt-0.5">
+                              {lang === 'bn'
+                                ? 'বাংলাদেশের (+880) মোবাইল নম্বরে ওয়ান-টাইম পাসওয়ার্ড (OTP) পাঠিয়ে অভিভাবক যাচাই ও পাসওয়ার্ড সেটআপ।'
+                                : lang === 'ar'
+                                  ? 'توثيق حساب ولي الأمر عبر إرسال رمز تحقق لمرة واحدة (OTP) إلى رقم الجوال (+880).'
+                                  : 'Verify guardian via SMS OTP sent to +880 mobile number.'}
+                            </p>
+                          </div>
+                        </label>
+
+                        <label
+                          onClick={() => setGuardianVerificationMethod('email_link')}
+                          data-testid="adm-verify-method-email"
+                          className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                            guardianVerificationMethod === 'email_link'
+                              ? 'bg-[#0F5132]/8 border-[#0F5132] text-[#0F5132]'
+                              : 'bg-white border-[#E3DAC9] text-[#1D1B18] hover:bg-[#FBF9F4]'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="guardianVerificationMethod"
+                            checked={guardianVerificationMethod === 'email_link'}
+                            onChange={() => setGuardianVerificationMethod('email_link')}
+                            className="mt-0.5 w-4 h-4 accent-[#0F5132]"
+                          />
+                          <div className="text-xs">
+                            <p className="font-bold">
+                              {lang === 'bn'
+                                ? 'B. ইমেইল ঠিকানা — ইমেইল ভেরিফিকেশন লিংক'
+                                : lang === 'ar'
+                                  ? 'ب. البريد الإلكتروني — رابط التفعيل عبر البريد'
+                                  : 'B. Email Address — Email Verification Link'}
+                            </p>
+                            <p className="text-[11px] text-[#6E675C] mt-0.5">
+                              {lang === 'bn'
+                                ? 'অভিভাবকের ইমেইলে ভেরিফিকেশন লিংক পাঠিয়ে সত্যতা যাচাই ও পাসওয়ার্ড সেটআপ।'
+                                : lang === 'ar'
+                                  ? 'توثيق حساب ولي الأمر عبر إرسال رابط التفعيل إلى البريد الإلكتروني.'
+                                  : 'Verify guardian via Email Verification Link.'}
+                            </p>
+                          </div>
+                        </label>
                       </div>
                     </div>
 
@@ -1547,12 +2102,16 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <span className="font-bold text-[#1D1B18]">
                           {lang === 'bn'
                             ? 'অভিভাবক পোর্টাল অ্যাকাউন্টে এই শিক্ষার্থীর প্রোফাইল সংযুক্ত করার আবেদন করুন'
-                            : 'Request Guardian Portal Account Linking for this Student'}
+                            : lang === 'ar'
+                              ? 'طلب ربط ملف هذا الطالب بحساب بوابة ولي الأمر'
+                              : 'Request Guardian Portal Account Linking for this Student'}
                         </span>
                         <p className="text-[#6E675C] mt-0.5">
                           {lang === 'bn'
-                            ? 'মুহতামিম কর্তৃক ভর্তি অনুমোদনের পর অভিভাবক তার নিজস্ব অ্যাকাউন্ট থেকে সন্তানের হাজিরা, পরীক্ষার ফলাফল, ফি এবং হিফয ডায়েরি নিরাপদে পর্যবেক্ষণ করতে পারবেন।'
-                            : 'Upon approval, the guardian will have read-only access to this child’s attendance, exam results, fees, and Hifz diary.'}
+                            ? 'মুহতামিম কর্তৃক ভর্তি অনুমোদনের পর অভিভাবক তার নিজস্ব ভেরিফাইড অ্যাকাউন্ট থেকে সন্তানের হাজিরা, পরীক্ষার ফলাফল, ফি এবং হিফয ডায়েরি নিরাপদে পর্যবেক্ষণ করতে পারবেন।'
+                            : lang === 'ar'
+                              ? 'بعد اعتماد القبول من المهتمم، سيتمكن ولي الأمر الموثق من متابعة حضور الطالب ونتائج الامتحانات والرسوم وسجل الحفظ.'
+                              : 'Upon approval, the verified guardian will have read-only access to this child’s attendance, exam results, fees, and Hifz diary.'}
                         </p>
                       </div>
                     </label>
@@ -1566,7 +2125,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
-                        {lang === 'bn' ? 'ভর্তি বিভাগ *' : 'Department *'}
+                        {lang === 'bn'
+                          ? 'ভর্তি বিভাগ *'
+                          : lang === 'ar'
+                            ? 'القسم الأكاديمي *'
+                            : 'Department *'}
                       </label>
                       <select
                         value={department}
@@ -1580,17 +2143,23 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <option value="hifz">
                           {lang === 'bn'
                             ? 'হিফযুল কুরআন বিভাগ (Hifz)'
-                            : 'Hifz-ul-Quran Department'}
+                            : lang === 'ar'
+                              ? 'قسم تحفيظ القرآن الكريم'
+                              : 'Hifz-ul-Quran Department'}
                         </option>
                         <option value="qawmi">
                           {lang === 'bn'
                             ? 'কওমি কিতাব বিভাগ (Qawmi Kitab)'
-                            : 'Qawmi Kitab Department'}
+                            : lang === 'ar'
+                              ? 'قسم الكتب الشرعية (القومي)'
+                              : 'Qawmi Kitab Department'}
                         </option>
                         <option value="general">
                           {lang === 'bn'
                             ? 'জেনারেল ক্যাডেট বিভাগ (General Cadet)'
-                            : 'General Cadet Department'}
+                            : lang === 'ar'
+                              ? 'قسم التعليم العام والكاديت'
+                              : 'General Cadet Department'}
                         </option>
                       </select>
                     </div>
@@ -1599,7 +2168,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'কাঙ্ক্ষিত শ্রেণি / জামাত *'
-                          : 'Requested Class / Jamat *'}
+                          : lang === 'ar'
+                            ? 'الصف / المرحلة المطلوبة *'
+                            : 'Requested Class / Jamat *'}
                       </label>
                       <select
                         value={requestedClass}
@@ -1608,7 +2179,7 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       >
                         {CLASS_PRESETS_BY_DEPT[department].map((cls) => (
                           <option key={cls} value={cls}>
-                            {cls}
+                            {localizeClassPreset(cls, lang)}
                           </option>
                         ))}
                       </select>
@@ -1616,7 +2187,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
 
                     <div>
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
-                        {lang === 'bn' ? 'শিক্ষাবর্ষ *' : 'Academic Session *'}
+                        {lang === 'bn'
+                          ? 'শিক্ষাবর্ষ *'
+                          : lang === 'ar'
+                            ? 'العام الدراسي *'
+                            : 'Academic Session *'}
                       </label>
                       <input
                         type="text"
@@ -1632,7 +2207,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'আবাসিক অবস্থা *'
-                          : 'Residential Status *'}
+                          : lang === 'ar'
+                            ? 'نظام الإقامة *'
+                            : 'Residential Status *'}
                       </label>
                       <select
                         value={residentialStatus}
@@ -1646,12 +2223,16 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <option value="residential">
                           {lang === 'bn'
                             ? 'আবাসিক ছাত্রাবাস (Residential)'
-                            : 'Residential (Dormitory)'}
+                            : lang === 'ar'
+                              ? 'سكن داخلي (Residential)'
+                              : 'Residential (Dormitory)'}
                         </option>
                         <option value="day_scholar">
                           {lang === 'bn'
                             ? 'অনাবাসিক (Day Scholar)'
-                            : 'Non-Residential (Day Scholar)'}
+                            : lang === 'ar'
+                              ? 'دراسة نهارية غير مقيم (Day Scholar)'
+                              : 'Non-Residential (Day Scholar)'}
                         </option>
                       </select>
                     </div>
@@ -1660,13 +2241,21 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'পূর্ববর্তী শিক্ষা প্রতিষ্ঠান (প্রযোজ্য ক্ষেত্রে)'
-                          : 'Previous Institution (Optional)'}
+                          : lang === 'ar'
+                            ? 'المؤسسة التعليمية السابقة (اختياري)'
+                            : 'Previous Institution (Optional)'}
                       </label>
                       <input
                         type="text"
                         value={previousInstitution}
                         onChange={(e) => setPreviousInstitution(e.target.value)}
-                        placeholder="যেমন: দারুস সুন্নাহ নূরানী মাদ্রাসা"
+                        placeholder={
+                          lang === 'bn'
+                            ? 'যেমন: দারুস সুন্নাহ নূরানী মাদ্রাসা'
+                            : lang === 'ar'
+                              ? 'اسم المدرسة السابقة'
+                              : 'Name of previous school or madrasa'
+                        }
                         className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                       />
                     </div>
@@ -1675,13 +2264,21 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                         {lang === 'bn'
                           ? 'পূর্ববর্তী শ্রেণি / পারা (ঐচ্ছিক)'
-                          : 'Previous Class / Para Completed'}
+                          : lang === 'ar'
+                            ? 'الصف السابق / عدد الأجزاء المحفوظة'
+                            : 'Previous Class / Para Completed'}
                       </label>
                       <input
                         type="text"
                         value={previousClass}
                         onChange={(e) => setPreviousClass(e.target.value)}
-                        placeholder="যেমন: নাজেরা উত্তীর্ণ / ৫ পারা মুখস্থ"
+                        placeholder={
+                          lang === 'bn'
+                            ? 'যেমন: নাজেরা উত্তীর্ণ / ৫ পারা মুখস্থ'
+                            : lang === 'ar'
+                              ? 'مثال: إتمام التلاوة / حفظ ٥ أجزاء'
+                              : 'e.g. Completed Nazera / 5 Paras Hifz'
+                        }
                         className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2.5 text-sm text-[#1D1B18]"
                       />
                     </div>
@@ -1691,13 +2288,21 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     <label className="block text-xs font-bold text-[#1D1B18] mb-1">
                       {lang === 'bn'
                         ? 'স্বাস্থ্যগত তথ্য বা বিশেষ মন্তব্য (ঐচ্ছিক)'
-                        : 'Medical or Special Notes (Optional)'}
+                        : lang === 'ar'
+                          ? 'ملاحظات صحية أو خاصة (اختياري)'
+                          : 'Medical or Special Notes (Optional)'}
                     </label>
                     <textarea
                       rows={2}
                       value={medicalOrSpecialNotes}
                       onChange={(e) => setMedicalOrSpecialNotes(e.target.value)}
-                      placeholder="খাদ্য এলার্জি, চশমা ব্যবহার বা তিলাওয়াত সংক্রান্ত বিশেষ তথ্য থাকলে লিখুন..."
+                      placeholder={
+                        lang === 'bn'
+                          ? 'খাদ্য এলার্জি, চশমা ব্যবহার বা তিলাওয়াত সংক্রান্ত বিশেষ তথ্য থাকলে লিখুন...'
+                          : lang === 'ar'
+                            ? 'أذكر أي ملاحظات صحية أو غذائية أو تعليمية خاصة بالطالب...'
+                            : 'Any medical conditions, allergies, or recitation notes...'
+                      }
                       className="w-full rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] px-3.5 py-2 text-sm text-[#1D1B18]"
                     />
                   </div>
@@ -1714,13 +2319,17 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                           <FileText className="w-3.5 h-3.5" />
                           {lang === 'bn'
                             ? 'সহায়ক কাগজপত্র সংযুক্তি (জন্ম নিবন্ধন / পূর্ববর্তী সনদ - ঐচ্ছিক)'
-                            : 'Supporting Documents (Birth Certificate / Transfer Certificate - Optional)'}
+                            : lang === 'ar'
+                              ? 'المستندات الداعمة (شهادة الميلاد / الشهادة السابقة - اختياري)'
+                              : 'Supporting Documents (Birth Certificate / Transfer Certificate - Optional)'}
                         </p>
                         <p className="text-xs text-[#6E675C] mt-0.5">
                           {documentSummaryUrl ||
                             (lang === 'bn'
                               ? 'ভর্তি সাক্ষাৎকারের সময় মূল কপি প্রদর্শন করা যাবে অথবা এখানে ফাইল সংযুক্ত করুন।'
-                              : 'Attach a copy now or bring originals during the admission interview.')}
+                              : lang === 'ar'
+                                ? 'يمكن إرفاق نسخة هنا أو إحضار المستندات الأصلية عند المقابلة الشخصية.'
+                                : 'Attach a copy now or bring originals during the admission interview.')}
                         </p>
                       </div>
                       <label className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold bg-white border border-[#E3DAC9] text-[#1D1B18] hover:bg-[#F3EFE6] cursor-pointer shrink-0">
@@ -1729,10 +2338,14 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                           {documentName
                             ? lang === 'bn'
                               ? 'ডকুমেন্ট পরিবর্তন করুন'
-                              : 'Replace File'
+                              : lang === 'ar'
+                                ? 'تغيير الملف'
+                                : 'Replace File'
                             : lang === 'bn'
-                            ? 'কাগজপত্র নির্বাচন করুন'
-                            : 'Attach File'}
+                              ? 'কাগজপত্র নির্বাচন করুন'
+                              : lang === 'ar'
+                                ? 'إرفاق مستند'
+                                : 'Attach File'}
                         </span>
                         <input
                           type="file"
@@ -1758,17 +2371,32 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <span className="text-[11px] font-bold uppercase tracking-wider text-[#0F5132]">
                           {lang === 'bn'
                             ? 'চূড়ান্ত আবেদন প্রিভিউ (Application Summary)'
-                            : 'Application Review Summary'}
+                            : lang === 'ar'
+                              ? 'ملخص مراجعة طلب القبول'
+                              : 'Application Review Summary'}
                         </span>
                         <h4 className="text-lg font-bold text-[#1D1B18]">
                           {nameBn || '—'} ({nameEn || '—'})
                         </h4>
                         <p className="text-xs text-[#6E675C]">
-                          {requestedClass} ·{' '}
+                          {localizeClassPreset(requestedClass, lang)} ·{' '}
                           {residentialStatus === 'residential'
-                            ? 'আবাসিক (Residential)'
-                            : 'অনাবাসিক (Day Scholar)'}{' '}
-                          · শিক্ষাবর্ষ {academicSession}
+                            ? lang === 'bn'
+                              ? 'আবাসিক (Residential)'
+                              : lang === 'ar'
+                                ? 'سكن داخلي'
+                                : 'Residential'
+                            : lang === 'bn'
+                              ? 'অনাবাসিক (Day Scholar)'
+                              : lang === 'ar'
+                                ? 'غير مقيم'
+                                : 'Day Scholar'}{' '}
+                          ·{' '}
+                          {lang === 'bn'
+                            ? `শিক্ষাবর্ষ ${academicSession}`
+                            : lang === 'ar'
+                              ? `العام الدراسي ${academicSession}`
+                              : `Session ${academicSession}`}
                         </p>
                       </div>
                     </div>
@@ -1778,7 +2406,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <p className="text-[#6E675C]">
                           {lang === 'bn'
                             ? 'জন্ম তারিখ ও রক্তের গ্রুপ'
-                            : 'DOB & Blood Group'}
+                            : lang === 'ar'
+                              ? 'تاريخ الميلاد وفصيلة الدم'
+                              : 'DOB & Blood Group'}
                         </p>
                         <p className="font-bold text-[#1D1B18] mt-0.5">
                           {dateOfBirth} · {bloodGroup || 'N/A'}
@@ -1788,7 +2418,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <p className="text-[#6E675C]">
                           {lang === 'bn'
                             ? 'পিতা ও প্রধান অভিভাবক'
-                            : 'Father & Primary Guardian'}
+                            : lang === 'ar'
+                              ? 'الأب وولي الأمر الرئيسي'
+                              : 'Father & Primary Guardian'}
                         </p>
                         <p className="font-bold text-[#1D1B18] mt-0.5">
                           {fatherName} / {guardianName} ({guardianRelation})
@@ -1798,7 +2430,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <p className="text-[#6E675C]">
                           {lang === 'bn'
                             ? 'অভিভাবকের মোবাইল ও ঠিকানা'
-                            : 'Guardian Mobile & Address'}
+                            : lang === 'ar'
+                              ? 'جوال ولي الأمر والعنوان'
+                              : 'Guardian Mobile & Address'}
                         </p>
                         <p className="font-bold text-[#1D1B18] mt-0.5">
                           {guardianPhone} · {presentAddress}
@@ -1817,7 +2451,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <span className="text-xs font-medium text-[#1D1B18]">
                         {lang === 'bn'
                           ? 'আমি অঙ্গীকার করছি যে, উপরে প্রদত্ত সকল তথ্য সঠিক এবং ভর্তি অনুমোদনের পর শিক্ষার্থী উম্মুল কুরআন ক্যাডেট মাদ্রাসার শৃঙ্খলা, তারবিয়াহ ও আবাসিক নিয়মাবলী মেনে চলতে বাধ্য থাকবে।'
-                          : 'I confirm that all information provided above is accurate and agree to abide by the academic and disciplinary regulations of Ummul Quran Cadet Madrasa.'}
+                          : lang === 'ar'
+                            ? 'أقر بأن جميع البيانات المدخلة أعلاه صحيحة، وأتعهد بالالتزام باللوائح الأكاديمية والتربوية والداخلية لمدرسة أم القرآن كاديت.'
+                            : 'I confirm that all information provided above is accurate and agree to abide by the academic and disciplinary regulations of Ummul Quran Cadet Madrasa.'}
                       </span>
                     </label>
 
@@ -1827,12 +2463,18 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <p className="text-xs font-bold text-[#0F5132] uppercase tracking-wider">
                           {lang === 'bn'
                             ? 'মুহতামিম কর্তৃক তাৎক্ষণিক স্টুডেন্ট আইডি ও রোল বরাদ্দ'
-                            : 'Immediate Student ID & Roll Assignment by Muhtamim'}
+                            : lang === 'ar'
+                              ? 'تخصيص رقم الطالب والرقم التسلسلي مباشرة من المهتمم'
+                              : 'Immediate Student ID & Roll Assignment by Muhtamim'}
                         </p>
                         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                           <div>
                             <label className="block text-[11px] font-bold text-[#1D1B18] mb-1">
-                              {lang === 'bn' ? 'অফিশিয়াল স্টুডেন্ট আইডি *' : 'Student ID *'}
+                              {lang === 'bn'
+                                ? 'অফিশিয়াল স্টুডেন্ট আইডি *'
+                                : lang === 'ar'
+                                  ? 'رقم الطالب الرسمي *'
+                                  : 'Student ID *'}
                             </label>
                             <input
                               type="text"
@@ -1844,7 +2486,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                           </div>
                           <div>
                             <label className="block text-[11px] font-bold text-[#1D1B18] mb-1">
-                              {lang === 'bn' ? 'রোল নম্বর' : 'Roll No'}
+                              {lang === 'bn'
+                                ? 'রোল নম্বর'
+                                : lang === 'ar'
+                                  ? 'الرقم التسلسلي'
+                                  : 'Roll No'}
                             </label>
                             <input
                               type="number"
@@ -1856,7 +2502,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                           </div>
                           <div>
                             <label className="block text-[11px] font-bold text-[#1D1B18] mb-1">
-                              {lang === 'bn' ? 'ছাত্রাবাস কক্ষ' : 'Dorm Room'}
+                              {lang === 'bn'
+                                ? 'ছাত্রাবাস কক্ষ'
+                                : lang === 'ar'
+                                  ? 'غرفة السكن'
+                                  : 'Dorm Room'}
                             </label>
                             <input
                               type="text"
@@ -1867,7 +2517,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                           </div>
                           <div>
                             <label className="block text-[11px] font-bold text-[#1D1B18] mb-1">
-                              {lang === 'bn' ? 'মাসিক ফি (৳)' : 'Monthly Fee'}
+                              {lang === 'bn'
+                                ? 'মাসিক ফি (৳)'
+                                : lang === 'ar'
+                                  ? 'الرسوم الشهرية (৳)'
+                                  : 'Monthly Fee'}
                             </label>
                             <input
                               type="number"
@@ -1893,8 +2547,12 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       onClick={handlePrevStep}
                       className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold border border-[#E3DAC9] bg-white text-[#1D1B18] hover:bg-[#F3EFE6] cursor-pointer"
                     >
-                      <ArrowLeft className="w-4 h-4" />
-                      {lang === 'bn' ? 'পূর্ববর্তী ধাপ' : 'Previous Step'}
+                      <ArrowLeft className="w-4 h-4 rtl:rotate-180" />
+                      {lang === 'bn'
+                        ? 'পূর্ববর্তী ধাপ'
+                        : lang === 'ar'
+                          ? 'الخطوة السابقة'
+                          : 'Previous Step'}
                     </button>
                   )}
 
@@ -1904,7 +2562,11 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold border border-[#E3DAC9] bg-[#FBF9F4] text-[#6E675C] hover:text-[#1D1B18] cursor-pointer"
                   >
                     <Save className="w-3.5 h-3.5" />
-                    {lang === 'bn' ? 'খসড়া সংরক্ষণ' : 'Save Draft'}
+                    {lang === 'bn'
+                      ? 'খসড়া সংরক্ষণ'
+                      : lang === 'ar'
+                        ? 'حفظ كمسودة'
+                        : 'Save Draft'}
                   </button>
 
                   {draftSavedNotice && (
@@ -1922,8 +2584,14 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       data-testid="adm-btn-next"
                       className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-[#0F5132] text-white hover:bg-[#0B3D26] cursor-pointer"
                     >
-                      <span>{lang === 'bn' ? 'পরবর্তী ধাপ' : 'Next Step'}</span>
-                      <ArrowRight className="w-4 h-4" />
+                      <span>
+                        {lang === 'bn'
+                          ? 'পরবর্তী ধাপ'
+                          : lang === 'ar'
+                            ? 'الخطوة التالية'
+                            : 'Next Step'}
+                      </span>
+                      <ArrowRight className="w-4 h-4 rtl:rotate-180" />
                     </button>
                   ) : (
                     <button
@@ -1937,18 +2605,26 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         {isSubmitting
                           ? lang === 'bn'
                             ? 'জমা হচ্ছে...'
-                            : 'Submitting...'
+                            : lang === 'ar'
+                              ? 'جارٍ الإرسال...'
+                              : 'Submitting...'
                           : editingCorrectionApp
                           ? lang === 'bn'
                             ? 'সংশোধিত আবেদন পুনরায় জমা দিন'
-                            : 'Resubmit Corrected Application'
+                            : lang === 'ar'
+                              ? 'إعادة إرسال الطلب المصحح'
+                              : 'Resubmit Corrected Application'
                           : isApprover && isMuhtamimDirectEntry
                           ? lang === 'bn'
                             ? 'সরাসরি ভর্তি অনুমোদন ও স্টুডেন্ট প্রোফাইল তৈরি করুন'
-                            : 'Direct Submit & Immediately Approve'
+                            : lang === 'ar'
+                              ? 'اعتماد القبول المباشر وإنشاء ملف الطالب'
+                              : 'Direct Submit & Immediately Approve'
                           : lang === 'bn'
                           ? 'ভর্তি আবেদন চূড়ান্ত জমা দিন'
-                          : 'Submit Admission Application'}
+                          : lang === 'ar'
+                            ? 'إرسال طلب القبول النهائي'
+                            : 'Submit Admission Application'}
                       </span>
                     </button>
                   )}
@@ -1968,17 +2644,21 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                 <h3 className="text-base font-bold text-[#1D1B18]">
                   {lang === 'bn'
                     ? 'নিরাপদ ভর্তি আবেদন ট্র্যাকিং ও সংশোধন (Secure Application Status Tracker)'
-                    : 'Secure Admission Application Status Tracker'}
+                    : lang === 'ar'
+                      ? 'متابعة حالة طلب القبول وتصحيح البيانات بأمان'
+                      : 'Secure Admission Application Status Tracker'}
                 </h3>
                 <p className="text-xs text-[#6E675C]">
                   {lang === 'bn'
                     ? 'ব্যক্তিগত তথ্যের নিরাপত্তার জন্য আবেদন রেফারেন্স নম্বর এবং অভিভাবকের নিবন্ধিত মোবাইল নম্বর (অথবা জন্ম তারিখ) উভয়টি প্রদান করুন।'
-                    : 'To protect student privacy, enter both your Application Reference No and Guardian Mobile Number (or Date of Birth).'}
+                    : lang === 'ar'
+                      ? 'لحماية خصوصية بيانات الطالب، يرجى إدخال رقم مرجع الطلب مع رقم جوال ولي الأمر المسجل (أو تاريخ الميلاد).'
+                      : 'To protect student privacy, enter both your Application Reference No and Guardian Mobile Number (or Date of Birth).'}
                 </p>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full lg:w-[32rem]">
                 <div className="relative">
-                  <Search className="w-4 h-4 text-[#6E675C] absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <Search className="w-4 h-4 text-[#6E675C] absolute start-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={trackQuery}
@@ -1986,10 +2666,12 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     placeholder={
                       lang === 'bn'
                         ? 'রেফারেন্স নম্বর (UQCM-ADM-...)'
-                        : 'Reference No (UQCM-ADM-...)'
+                        : lang === 'ar'
+                          ? 'رقم المرجع (UQCM-ADM-...)'
+                          : 'Reference No (UQCM-ADM-...)'
                     }
                     data-testid="adm-track-search-input"
-                    className="w-full pl-9 pr-3.5 py-2 rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] text-xs sm:text-sm font-mono text-[#1D1B18]"
+                    className="w-full ps-9 pe-3.5 py-2 rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] text-xs sm:text-sm font-mono text-[#1D1B18]"
                   />
                 </div>
                 <div>
@@ -2000,7 +2682,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                     placeholder={
                       lang === 'bn'
                         ? 'অভিভাবকের মোবাইল বা জন্ম তারিখ *'
-                        : 'Guardian Mobile or DOB *'
+                        : lang === 'ar'
+                          ? 'جوال ولي الأمر أو تاريخ الميلاد *'
+                          : 'Guardian Mobile or DOB *'
                     }
                     data-testid="adm-track-secret-input"
                     className="w-full px-3.5 py-2 rounded-xl border border-[#E3DAC9] bg-[#FBF9F4] text-xs sm:text-sm text-[#1D1B18]"
@@ -2023,12 +2707,16 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
               <p className="text-sm font-bold text-[#1D1B18]">
                 {lang === 'bn'
                   ? 'কোনো ভর্তি আবেদন প্রদর্শিত হচ্ছে না'
-                  : 'No matching admission applications found'}
+                  : lang === 'ar'
+                    ? 'لم يتم العثور على طلبات قبول مطابقة'
+                    : 'No matching admission applications found'}
               </p>
               <p className="text-xs text-[#6E675C] mt-1">
                 {lang === 'bn'
                   ? 'নিরাপদ ট্র্যাকিংয়ের জন্য সঠিক রেফারেন্স নম্বর এবং অভিভাবকের মোবাইল নম্বর উভয়ই প্রদান করুন।'
-                  : 'Please provide both your Reference No and Guardian Mobile Number to view your application.'}
+                  : lang === 'ar'
+                    ? 'يرجى إدخال رقم المرجع الصحيح ورقم جوال ولي الأمر معاً لعرض حالة الطلب.'
+                    : 'Please provide both your Reference No and Guardian Mobile Number to view your application.'}
               </p>
             </div>
           ) : (
@@ -2060,15 +2748,24 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                           {app.nameBn} ({app.nameEn})
                         </h4>
                         <p className="text-xs text-[#6E675C]">
-                          {app.requestedClass} · অভিভাবক: {app.guardianName} (
-                          {app.guardianPhone})
+                          {localizeClassPreset(app.requestedClass, lang)} ·{' '}
+                          {lang === 'bn'
+                            ? 'অভিভাবক:'
+                            : lang === 'ar'
+                              ? 'ولي الأمر:'
+                              : 'Guardian:'}{' '}
+                          {app.guardianName} ({app.guardianPhone})
                         </p>
                       </div>
                     </div>
 
-                    <div className="text-left sm:text-right text-xs text-[#6E675C]">
+                    <div className="text-start sm:text-end text-xs text-[#6E675C]">
                       <p>
-                        {lang === 'bn' ? 'জমার তারিখ: ' : 'Submitted: '}
+                        {lang === 'bn'
+                          ? 'জমার তারিখ: '
+                          : lang === 'ar'
+                            ? 'تاريخ التقديم: '
+                            : 'Submitted: '}
                         <span className="font-semibold text-[#1D1B18]">
                           {app.submittedDate}
                         </span>
@@ -2077,7 +2774,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <p className="text-[#166534] font-bold mt-0.5">
                           {lang === 'bn'
                             ? `বরাদ্দকৃত শিক্ষার্থী আইডি: ${app.assignedAdmissionNo}`
-                            : `Assigned Student ID: ${app.assignedAdmissionNo}`}
+                            : lang === 'ar'
+                              ? `رقم الطالب المخصص: ${app.assignedAdmissionNo}`
+                              : `Assigned Student ID: ${app.assignedAdmissionNo}`}
                         </p>
                       )}
                     </div>
@@ -2096,7 +2795,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                       <span className="font-bold">
                         {lang === 'bn'
                           ? 'মুহতামিম / ভর্তি দপ্তরের মন্তব্য: '
-                          : 'Admission Office Remarks: '}
+                          : lang === 'ar'
+                            ? 'ملاحظات مكتب المهتمم / القبول: '
+                            : 'Admission Office Remarks: '}
                       </span>
                       {app.adminRemarks}
                     </div>
@@ -2109,7 +2810,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <p className="text-xs font-bold text-[#0F5132]">
                           {lang === 'bn'
                             ? 'পৃথক এককালীন অ্যাকাউন্ট অ্যাক্টিভেশন ও পাসওয়ার্ড সেটআপ কোড (Single-Use Activation)'
-                            : 'Separate Single-Use Account Activation Codes'}
+                            : lang === 'ar'
+                              ? 'رموز تفعيل الحساب المنفصلة لمرة واحدة للطالب وولي الأمر'
+                              : 'Separate Single-Use Account Activation Codes'}
                         </p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                           {app.studentInvitationCode && (
@@ -2118,7 +2821,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                                 <p className="text-[11px] text-[#6E675C]">
                                   {lang === 'bn'
                                     ? 'শিক্ষার্থী পোর্টাল অ্যাক্টিভেশন কোড'
-                                    : 'Student Activation Code'}
+                                    : lang === 'ar'
+                                      ? 'رمز تفعيل بوابة الطالب'
+                                      : 'Student Activation Code'}
                                 </p>
                                 <p
                                   className="font-mono font-extrabold text-[#0F5132]"
@@ -2136,7 +2841,7 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                                   data-testid={`activate-stu-btn-${app.referenceNo}`}
                                   className="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#0F5132] text-white hover:bg-[#0B3D26] cursor-pointer"
                                 >
-                                  {lang === 'bn' ? 'সক্রিয় করুন' : 'Activate'}
+                                  {lang === 'bn' ? 'সক্রিয় করুন' : lang === 'ar' ? 'تفعيل' : 'Activate'}
                                 </button>
                               )}
                             </div>
@@ -2147,7 +2852,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                                 <p className="text-[11px] text-[#6E675C]">
                                   {lang === 'bn'
                                     ? 'অভিভাবক পোর্টাল পৃথক অ্যাক্টিভেশন কোড'
-                                    : 'Guardian Separate Activation Code'}
+                                    : lang === 'ar'
+                                      ? 'رمز تفعيل بوابة ولي الأمر'
+                                      : 'Guardian Separate Activation Code'}
                                 </p>
                                 <p
                                   className="font-mono font-extrabold text-[#8A6306]"
@@ -2165,7 +2872,7 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                                   data-testid={`activate-grd-btn-${app.referenceNo}`}
                                   className="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#B8860B] text-white hover:bg-[#8A6306] cursor-pointer"
                                 >
-                                  {lang === 'bn' ? 'সক্রিয় করুন' : 'Activate'}
+                                  {lang === 'bn' ? 'সক্রিয় করুন' : lang === 'ar' ? 'تفعيل' : 'Activate'}
                                 </button>
                               )}
                             </div>
@@ -2184,7 +2891,9 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                         <Edit3 className="w-3.5 h-3.5" />
                         {lang === 'bn'
                           ? 'তথ্য ও ছবি সংশোধন করে পুনরায় জমা দিন'
-                          : 'Edit & Resubmit Application'}
+                          : lang === 'ar'
+                            ? 'تعديل البيانات والصورة وإعادة الإرسال'
+                            : 'Edit & Resubmit Application'}
                       </button>
                     </div>
                   )}
@@ -2434,91 +3143,199 @@ export const AdmissionsModule: React.FC<AdmissionsModuleProps> = ({
                   {/* Provisioned Student & Guardian Single-Use Activation Codes Card */}
                   {selectedApplication.status === 'approved' &&
                     (selectedApplication.studentInvitationCode ||
-                      selectedApplication.guardianInvitationCode) && (
-                      <div
-                        className="rounded-xl bg-[#F0FDF4] border border-[#166534]/35 p-4 space-y-2.5"
-                        data-testid="admin-provisioned-invitations-card"
-                      >
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs font-bold text-[#166534]">
-                            {lang === 'bn'
-                              ? 'অ্যাকাউন্ট প্রোভিশনিং ও পৃথক এককালীন অ্যাক্টিভেশন কোড (পাসওয়ার্ড ছাড়াই নিরাপদ সেটআপ)'
-                              : 'Provisioned Single-Use Account Activation Codes'}
-                          </p>
-                          <span className="text-[11px] font-mono font-bold text-[#0F5132]">
-                            ID: {selectedApplication.assignedAdmissionNo}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                          {selectedApplication.studentInvitationCode && (
-                            <div className="p-2.5 rounded-lg bg-white border border-[#166534]/25 flex items-center justify-between gap-2">
-                              <div>
-                                <p className="text-[11px] text-[#6E675C]">
-                                  {lang === 'bn'
-                                    ? 'শিক্ষার্থীর এককালীন কোড (Student)'
-                                    : 'Student Activation Code'}
-                                </p>
-                                <p
-                                  className="font-mono font-extrabold text-[#0F5132]"
-                                  data-testid="admin-provisioned-stu-code"
-                                >
-                                  {selectedApplication.studentInvitationCode}
-                                </p>
-                              </div>
-                              {onReturnToLogin && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    onReturnToLogin(
-                                      selectedApplication.studentInvitationCode
-                                    )
-                                  }
-                                  data-testid="admin-open-stu-activation-btn"
-                                  className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-[#0F5132] text-white hover:bg-[#0B3D26] cursor-pointer"
-                                >
-                                  {lang === 'bn'
-                                    ? 'শিক্ষার্থী অ্যাক্টিভেশন'
-                                    : 'Activate Student'}
-                                </button>
-                              )}
+                      selectedApplication.guardianInvitationCode) && (() => {
+                      const stuInv = accountInvitations.find(
+                        (inv) =>
+                          inv.invitationCode === selectedApplication.studentInvitationCode ||
+                          (inv.targetRole === 'student' && inv.applicationId === selectedApplication.id)
+                      );
+                      const grdInv = accountInvitations.find(
+                        (inv) =>
+                          inv.invitationCode === selectedApplication.guardianInvitationCode ||
+                          (inv.targetRole === 'guardian' && inv.applicationId === selectedApplication.id)
+                      );
+                      const verifyMethodLabel =
+                        (grdInv?.verificationMethod || selectedApplication.guardianVerificationMethod) === 'email_link'
+                          ? 'Email Verification Link'
+                          : 'Mobile SMS OTP (+880)';
+                      const isGrdVerified =
+                        grdInv?.status === 'activated' ||
+                        grdInv?.verificationStatus === 'verified' ||
+                        selectedApplication.guardianVerificationStatus === 'verified' ||
+                        Boolean(selectedApplication.guardianUid);
+                      const isStuActivated = stuInv?.status === 'activated';
+
+                      return (
+                        <div
+                          className="rounded-xl bg-[#F0FDF4] border border-[#166534]/35 p-4 space-y-3"
+                          data-testid="admin-provisioned-invitations-card"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-xs font-bold text-[#166534]">
+                                {lang === 'bn'
+                                  ? 'অভিভাবক যাচাইকরণ ও পৃথক অ্যাকাউন্ট অ্যাক্টিভেশন অবস্থা'
+                                  : 'Guardian Verification & Account Activation Status'}
+                              </p>
+                              <p className="text-[11px] text-[#6E675C]">
+                                {lang === 'bn'
+                                  ? `যাচাই পদ্ধতি: ${verifyMethodLabel} · অভিভাবক যাচাই: ${
+                                      isGrdVerified ? 'সম্পন্ন (Verified)' : 'অপেক্ষমান (Pending Verification)'
+                                    } · শিক্ষার্থী অ্যাকাউন্ট: ${
+                                      isStuActivated ? 'সক্রিয় (Activated)' : 'অপেক্ষমান (Pending Activation)'
+                                    }`
+                                  : `Method: ${verifyMethodLabel} · Guardian: ${
+                                      isGrdVerified ? 'Verified' : 'Pending Verification'
+                                    } · Student: ${isStuActivated ? 'Activated' : 'Pending Activation'}`}
+                              </p>
                             </div>
-                          )}
-                          {selectedApplication.guardianInvitationCode && (
-                            <div className="p-2.5 rounded-lg bg-white border border-[#B8860B]/35 flex items-center justify-between gap-2">
-                              <div>
-                                <p className="text-[11px] text-[#6E675C]">
-                                  {lang === 'bn'
-                                    ? 'অভিভাবকের পৃথক কোড (Guardian)'
-                                    : 'Guardian Activation Code'}
-                                </p>
-                                <p
-                                  className="font-mono font-extrabold text-[#8A6306]"
-                                  data-testid="admin-provisioned-grd-code"
-                                >
-                                  {selectedApplication.guardianInvitationCode}
-                                </p>
+                            <span className="text-[11px] font-mono font-bold text-[#0F5132] bg-white px-2.5 py-1 rounded-md border border-[#166534]/20">
+                              ID: {selectedApplication.assignedAdmissionNo}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                            {selectedApplication.guardianInvitationCode && (
+                              <div className="p-3 rounded-lg bg-white border border-[#B8860B]/35 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <p className="text-[11px] text-[#6E675C]">
+                                      {lang === 'bn'
+                                        ? '১. অভিভাবক যাচাই ও অ্যাক্টিভেশন কোড'
+                                        : '1. Guardian Activation Code'}
+                                    </p>
+                                    <p
+                                      className="font-mono font-extrabold text-[#8A6306]"
+                                      data-testid="admin-provisioned-grd-code"
+                                    >
+                                      {selectedApplication.guardianInvitationCode}
+                                    </p>
+                                  </div>
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                      isGrdVerified
+                                        ? 'bg-[#166534]/12 text-[#166534]'
+                                        : 'bg-[#B8860B]/15 text-[#8A6306]'
+                                    }`}
+                                  >
+                                    {isGrdVerified
+                                      ? lang === 'bn'
+                                        ? 'ভেরিফাইড ও সক্রিয়'
+                                        : 'Verified'
+                                      : lang === 'bn'
+                                      ? 'যাচাইয়ের অপেক্ষায়'
+                                      : 'Pending'}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                  {onReturnToLogin && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onReturnToLogin(
+                                          selectedApplication.guardianInvitationCode
+                                        )
+                                      }
+                                      data-testid="admin-open-grd-activation-btn"
+                                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-[#B8860B] text-white hover:bg-[#8A6306] cursor-pointer"
+                                    >
+                                      {lang === 'bn'
+                                        ? 'অভিভাবক অ্যাক্টিভেশন'
+                                        : 'Activate Guardian'}
+                                    </button>
+                                  )}
+                                  {onResendOrRecoverInvitation && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onResendOrRecoverInvitation(
+                                          selectedApplication,
+                                          'guardian'
+                                        )
+                                      }
+                                      data-testid="admin-resend-grd-btn"
+                                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border border-[#E3DAC9] bg-[#FBF9F4] text-[#1D1B18] hover:bg-[#F3EFE6] cursor-pointer"
+                                    >
+                                      {lang === 'bn'
+                                        ? 'পুনরায় পাঠান / রিকভারি'
+                                        : 'Resend / Recovery'}
+                                    </button>
+                                  )}
+                                </div>
                               </div>
-                              {onReturnToLogin && (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    onReturnToLogin(
-                                      selectedApplication.guardianInvitationCode
-                                    )
-                                  }
-                                  data-testid="admin-open-grd-activation-btn"
-                                  className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-[#B8860B] text-white hover:bg-[#8A6306] cursor-pointer"
-                                >
-                                  {lang === 'bn'
-                                    ? 'অভিভাবক অ্যাক্টিভেশন'
-                                    : 'Activate Guardian'}
-                                </button>
-                              )}
-                            </div>
-                          )}
+                            )}
+                            {selectedApplication.studentInvitationCode && (
+                              <div className="p-3 rounded-lg bg-white border border-[#166534]/25 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div>
+                                    <p className="text-[11px] text-[#6E675C]">
+                                      {lang === 'bn'
+                                        ? '২. শিক্ষার্থী পোর্টাল এককালীন কোড'
+                                        : '2. Student Activation Code'}
+                                    </p>
+                                    <p
+                                      className="font-mono font-extrabold text-[#0F5132]"
+                                      data-testid="admin-provisioned-stu-code"
+                                    >
+                                      {selectedApplication.studentInvitationCode}
+                                    </p>
+                                  </div>
+                                  <span
+                                    className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                      isStuActivated
+                                        ? 'bg-[#166534]/12 text-[#166534]'
+                                        : 'bg-[#0F5132]/10 text-[#0F5132]'
+                                    }`}
+                                  >
+                                    {isStuActivated
+                                      ? lang === 'bn'
+                                        ? 'সক্রিয় (Activated)'
+                                        : 'Activated'
+                                      : lang === 'bn'
+                                      ? 'সক্রিয়করণের অপেক্ষায়'
+                                      : 'Pending'}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 pt-1">
+                                  {onReturnToLogin && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onReturnToLogin(
+                                          selectedApplication.studentInvitationCode
+                                        )
+                                      }
+                                      data-testid="admin-open-stu-activation-btn"
+                                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold bg-[#0F5132] text-white hover:bg-[#0B3D26] cursor-pointer"
+                                    >
+                                      {lang === 'bn'
+                                        ? 'শিক্ষার্থী অ্যাক্টিভেশন'
+                                        : 'Activate Student'}
+                                    </button>
+                                  )}
+                                  {onResendOrRecoverInvitation && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        onResendOrRecoverInvitation(
+                                          selectedApplication,
+                                          'student'
+                                        )
+                                      }
+                                      data-testid="admin-resend-stu-btn"
+                                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border border-[#E3DAC9] bg-[#FBF9F4] text-[#1D1B18] hover:bg-[#F3EFE6] cursor-pointer"
+                                    >
+                                      {lang === 'bn'
+                                        ? 'রিকভারি কোড নবায়ন'
+                                        : 'Re-issue Recovery'}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
 
                   {/* Muhtamim Assignment & Decision Controls */}
                   {isApprover ? (

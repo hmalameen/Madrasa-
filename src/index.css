@@ -1,223 +1,232 @@
 @import "tailwindcss";
 
-@theme {
-  --font-sans: 'Tiro Bangla', 'Hind Siliguri', 'Plus Jakarta Sans', 'Noto Naskh Arabic', serif;
-  --font-mono: 'Tiro Bangla', 'JetBrains Mono', 'Noto Naskh Arabic', serif;
+@layer base {
+  :root {
+    /* Typography Tokens — Royal Islamic Luxury + Clean Bengali & Arabic Legibility */
+    --font-sans: 'Plus Jakarta Sans', 'Noto Sans Bengali', 'Hind Siliguri', sans-serif;
+    --font-bn: 'Noto Sans Bengali', 'Hind Siliguri', 'Plus Jakarta Sans', sans-serif;
+    --font-display-bn: 'Tiro Bangla', 'Noto Sans Bengali', 'Hind Siliguri', serif;
+    --font-display-en: 'Cormorant Garamond', 'Tiro Bangla', Georgia, serif;
+    --font-ar: 'Noto Naskh Arabic', 'Noto Sans Bengali', serif;
+    --font-mono: 'JetBrains Mono', monospace;
+
+    /* Phase 5 Royal Islamic Luxury Palette Tokens */
+    --uqcm-midnight-navy: #061326;
+    --uqcm-royal-navy: #0A1B33;
+    --uqcm-emerald: #087A59;
+    --uqcm-deep-emerald: #064B3A;
+    --uqcm-champagne-gold: #D9B64C;
+    --uqcm-soft-gold: #E8D58A;
+    --uqcm-warm-ivory: #F7F4EC;
+    --uqcm-warm-parchment: #EFEAD8;
+    --uqcm-muted-slate: #9CA9B8;
+    --uqcm-ink-charcoal: #122033;
+
+    /* Spacing & Elevation Tokens */
+    --uqcm-radius-sm: 0.375rem;
+    --uqcm-radius-md: 0.625rem;
+    --uqcm-radius-lg: 0.875rem;
+    --uqcm-shadow-luxury: 0 22px 48px -16px rgba(4, 12, 24, 0.55);
+    --uqcm-shadow-ivory: 0 18px 40px -18px rgba(6, 19, 38, 0.10);
+    --uqcm-border-gold: rgba(217, 182, 76, 0.24);
+    --uqcm-border-gold-strong: rgba(217, 182, 76, 0.48);
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  body, button, input, select, textarea {
+    font-family: var(--font-bn);
+  }
+
+  body {
+    background-color: var(--uqcm-warm-ivory);
+    color: var(--uqcm-ink-charcoal);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
+    line-height: 1.68;
+  }
 }
 
-:root {
-  --font-bn: 'Tiro Bangla', 'Hind Siliguri', 'Plus Jakarta Sans', 'Noto Naskh Arabic', serif;
-  --font-en: 'Plus Jakarta Sans', 'Tiro Bangla', 'Noto Naskh Arabic', sans-serif;
-  --font-ar: 'Noto Naskh Arabic', 'Tiro Bangla', 'Plus Jakarta Sans', serif;
-  --font-mono: 'Tiro Bangla', 'JetBrains Mono', 'Noto Naskh Arabic', serif;
-}
-
-html[lang="bn"] body,
-html[lang="bn"] button,
-html[lang="bn"] input,
-html[lang="bn"] select,
-html[lang="bn"] textarea,
-html[lang="bn"] svg text {
+.font-bn {
   font-family: var(--font-bn);
 }
 
-html[lang="en"] body {
-  font-family: var(--font-en);
+.font-display-bn {
+  font-family: var(--font-display-bn);
 }
 
-html[lang="ar"] body {
+.font-display-en {
+  font-family: var(--font-display-en);
+}
+
+.font-ar {
   font-family: var(--font-ar);
+  line-height: 1.85;
 }
 
-.font-mono,
-.tabular-nums {
-  font-family: var(--font-mono) !important;
+.font-mono-num {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
 
-/* Phase 6A — Animated Login UI Keyframes & Utilities */
-@keyframes uqcm-bg-shift {
-  0% {
-    background-position: 0% 50%;
-  }
-  50% {
-    background-position: 100% 50%;
-  }
-  100% {
-    background-position: 0% 50%;
-  }
+/* Royal Islamic Luxury Background & Architectural Surface Patterns */
+.uqcm-islamic-lattice {
+  background-color: #061326;
+  background-image:
+    radial-gradient(circle at 50% 0%, rgba(217, 182, 76, 0.15) 0%, transparent 62%),
+    radial-gradient(circle at 85% 20%, rgba(8, 122, 89, 0.18) 0%, transparent 52%),
+    linear-gradient(135deg, rgba(217, 182, 76, 0.04) 1px, transparent 1px),
+    linear-gradient(45deg, rgba(217, 182, 76, 0.04) 1px, transparent 1px),
+    linear-gradient(165deg, #061326 0%, #0A1B33 58%, #062821 100%);
+  background-size: 100% 100%, 100% 100%, 44px 44px, 44px 44px, 100% 100%;
 }
 
-@keyframes uqcm-trail-flow {
-  0% {
-    stroke-dashoffset: 1200;
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 0.95;
-  }
-  100% {
-    stroke-dashoffset: 0;
-    opacity: 0.45;
-  }
+.uqcm-ivory-lattice {
+  background-color: var(--uqcm-warm-ivory);
+  background-image:
+    radial-gradient(circle at 15% 10%, rgba(217, 182, 76, 0.08) 0%, transparent 48%),
+    radial-gradient(circle at 85% 90%, rgba(8, 122, 89, 0.06) 0%, transparent 50%),
+    linear-gradient(90deg, rgba(6, 19, 38, 0.025) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(6, 19, 38, 0.025) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 56px 56px, 56px 56px;
 }
 
-@keyframes uqcm-trail-flow-reverse {
-  0% {
-    stroke-dashoffset: 0;
-    opacity: 0.35;
-  }
-  50% {
-    opacity: 0.85;
-  }
-  100% {
-    stroke-dashoffset: 1200;
-    opacity: 0.35;
-  }
+.uqcm-mihrab-card {
+  position: relative;
+  border: 1px solid rgba(217, 182, 76, 0.24);
+  box-shadow: var(--uqcm-shadow-ivory);
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), border-color 240ms ease, box-shadow 240ms ease;
 }
 
-@keyframes uqcm-particle-drift {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-    opacity: 0.35;
-  }
-  50% {
-    transform: translate3d(8px, -14px, 0) scale(1.25);
-    opacity: 0.9;
-  }
+.uqcm-mihrab-card:hover {
+  border-color: rgba(217, 182, 76, 0.52);
+  box-shadow: 0 22px 44px -18px rgba(6, 19, 38, 0.16);
 }
 
-@keyframes uqcm-lantern-sway {
-  0%,
-  100% {
-    transform: rotate(-1.6deg);
-  }
-  50% {
-    transform: rotate(1.6deg);
-  }
+.uqcm-royal-panel {
+  background: linear-gradient(160deg, #0A1B33 0%, #061326 65%, #062724 100%);
+  border: 1px solid rgba(217, 182, 76, 0.26);
+  box-shadow: var(--uqcm-shadow-luxury);
 }
 
-@keyframes uqcm-glow-pulse {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: scale(0.97);
-  }
-  50% {
-    opacity: 0.95;
-    transform: scale(1.04);
-  }
+.uqcm-gold-hairline {
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(217, 182, 76, 0.55) 50%, transparent 100%);
 }
 
-@keyframes uqcm-brand-fade-in {
-  0% {
-    opacity: 0;
-    transform: translateY(12px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* Custom scrollbar for sleek look */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
-
-@keyframes uqcm-card-enter {
-  0% {
-    opacity: 0;
-    transform: translateY(22px) scale(0.985);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
+::-webkit-scrollbar-track {
+  background: #EFEAD8;
 }
-
-@keyframes uqcm-view-switch {
-  0% {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+::-webkit-scrollbar-thumb {
+  background: #B8AD92;
+  border-radius: 9999px;
 }
-
-.animate-uqcm-bg {
-  background-size: 200% 200%;
-  animation: uqcm-bg-shift 18s ease-in-out infinite;
-}
-
-.animate-uqcm-trail {
-  stroke-dasharray: 260 940;
-  animation: uqcm-trail-flow 11s linear infinite;
-}
-
-.animate-uqcm-trail-reverse {
-  stroke-dasharray: 220 980;
-  animation: uqcm-trail-flow-reverse 14s linear infinite;
-}
-
-.animate-uqcm-particle {
-  animation: uqcm-particle-drift 6.5s ease-in-out infinite;
-}
-
-.animate-uqcm-lantern {
-  transform-origin: top center;
-  animation: uqcm-lantern-sway 5.5s ease-in-out infinite;
-}
-
-.animate-uqcm-glow {
-  animation: uqcm-glow-pulse 4s ease-in-out infinite;
-}
-
-.animate-uqcm-brand {
-  animation: uqcm-brand-fade-in 0.75s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.animate-uqcm-card {
-  animation: uqcm-card-enter 0.65s cubic-bezier(0.16, 1, 0.3, 1) 0.08s both;
-}
-
-.animate-uqcm-view {
-  animation: uqcm-view-switch 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.uqcm-input-shell {
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
-}
-
-.uqcm-input-shell:focus-within {
-  border-color: #10b981;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.22), 0 0 18px rgba(16, 185, 129, 0.24);
-  background-color: rgba(6, 32, 48, 0.88);
+::-webkit-scrollbar-thumb:hover {
+  background: #8D8165;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .animate-uqcm-bg,
-  .animate-uqcm-trail,
-  .animate-uqcm-trail-reverse,
-  .animate-uqcm-particle,
-  .animate-uqcm-lantern,
-  .animate-uqcm-glow,
-  .animate-uqcm-brand,
-  .animate-uqcm-card,
-  .animate-uqcm-view {
-    animation: none !important;
-    transition: none !important;
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
+/* Print Styles for ID Cards, Receipts, and Marksheets */
 @media print {
-  .no-print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+
+  html, body {
+    background: white !important;
+    color: black !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Hide navigation, headers, sidebars, and non-printable buttons */
+  aside,
+  header,
+  nav,
+  footer,
+  .no-print,
+  button:not(.print-visible) {
     display: none !important;
   }
-  body {
-    background: #ffffff !important;
-    color: #000000 !important;
+
+  /* Reset layout wrappers so printable content uses full page */
+  main,
+  .print-wrapper {
+    margin: 0 !important;
+    padding: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    overflow: visible !important;
   }
-  .print-only {
-    display: block !important;
+
+  /* If a specific print area is active, isolate it cleanly */
+  body.printing-active * {
+    visibility: hidden;
+  }
+
+  body.printing-active .printable-area,
+  body.printing-active .printable-area * {
+    visibility: visible;
+  }
+
+  body.printing-active .printable-area {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* Prevent awkward page breaks inside cards/rows */
+  .print-card,
+  .id-card-item,
+  tr,
+  .receipt-voucher {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  /* ID Card Batch Grid for A4 Print */
+  .print-id-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 12mm !important;
+    justify-items: center !important;
+    align-items: start !important;
+    width: 100% !important;
+  }
+
+  /* Preserve backgrounds & colors in print */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 }
-

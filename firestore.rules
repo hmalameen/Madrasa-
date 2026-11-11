@@ -809,19 +809,49 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isValidId(noticeId) && isAdmin();
     }
 
-    match /settings/{settingId} {
-      allow get: if isSignedIn() && isValidId(settingId);
-      allow list: if isSignedIn() && (
-        existing().defaultLanguage in ['bn', 'en', 'ar'] ||
-        existing().institutionNameEn == 'EXAM_SETUP_CONFIG' ||
-        existing().authorId == request.auth.uid
-      );
-      allow create: if isSignedIn() && isValidId(settingId) && isValidInstitutionSettings(incoming()) &&
+    match /settings/website-cms-public {
+      allow get: if true;
+      allow list: if false;
+      allow create: if isSignedIn() && isValidInstitutionSettings(incoming()) &&
+        incoming().institutionNameEn == 'PUBLIC_WEBSITE_CMS_SNAPSHOT' &&
         incoming().authorId == request.auth.uid &&
         incoming().createdAt == request.time &&
         incoming().updatedAt == request.time &&
         isAdmin();
-      allow update: if isSignedIn() && isValidId(settingId) && isValidInstitutionSettings(incoming()) &&
+      allow update: if isSignedIn() && isValidInstitutionSettings(incoming()) &&
+        incoming().institutionNameEn == 'PUBLIC_WEBSITE_CMS_SNAPSHOT' &&
+        (incoming().authorId == existing().authorId || (isAdmin() && incoming().authorId == request.auth.uid)) &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+      allow delete: if false;
+    }
+
+    match /settings/{settingId} {
+      allow get: if isSignedIn() && isValidId(settingId) &&
+        settingId != 'website-cms-public' && (
+          settingId != 'website-cms-config' || isAdmin()
+        );
+      allow list: if isSignedIn() &&
+        existing().institutionNameEn != 'PUBLIC_WEBSITE_CMS_SNAPSHOT' && (
+          existing().institutionNameEn != 'WEBSITE_CMS_CONFIG' || isAdmin()
+        ) && (
+          existing().defaultLanguage in ['bn', 'en', 'ar'] ||
+          existing().institutionNameEn == 'EXAM_SETUP_CONFIG' ||
+          existing().authorId == request.auth.uid
+        );
+      allow create: if isSignedIn() && isValidId(settingId) &&
+        settingId != 'website-cms-public' &&
+        isValidInstitutionSettings(incoming()) &&
+        incoming().institutionNameEn != 'PUBLIC_WEBSITE_CMS_SNAPSHOT' &&
+        incoming().authorId == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        isAdmin();
+      allow update: if isSignedIn() && isValidId(settingId) &&
+        settingId != 'website-cms-public' &&
+        isValidInstitutionSettings(incoming()) &&
+        incoming().institutionNameEn != 'PUBLIC_WEBSITE_CMS_SNAPSHOT' &&
         (incoming().authorId == existing().authorId || (isAdmin() && incoming().authorId == request.auth.uid)) &&
         incoming().createdAt == existing().createdAt &&
         incoming().updatedAt == request.time && (
@@ -832,7 +862,9 @@ service cloud.firestore {
             'defaultLanguage', 'activeDepartments', 'gradingSystem', 'updatedAt'
           ]))
         );
-      allow delete: if isSignedIn() && isValidId(settingId) && isAdmin();
+      allow delete: if isSignedIn() && isValidId(settingId) &&
+        settingId != 'website-cms-public' &&
+        isAdmin();
     }
 
     match /bannerSlides/{slideId} {
