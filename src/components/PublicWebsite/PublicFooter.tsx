@@ -75,8 +75,8 @@ export const PublicFooter: React.FC<PublicFooterProps> = ({
           {/* Column 1: Institutional Crest, Mission & Active Session (4 cols) */}
           <div className="lg:col-span-4 space-y-5">
             <div className="flex items-center gap-3.5">
-              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-[#F7F4EC] to-[#E8D58A] p-0.5 shadow-[0_8px_24px_rgba(217,182,76,0.25)] ring-1 ring-[#D9B64C]/60 shrink-0 flex items-center justify-center">
-                <InstitutionalCrest className="w-12 h-12" />
+              <div className="w-16 h-16 rounded-full bg-[#0A1B33]/80 p-1 shadow-[0_8px_24px_rgba(217,182,76,0.25)] ring-1 ring-[#D9B64C]/60 shrink-0 flex items-center justify-center">
+                <InstitutionalCrest className="w-full h-full" />
               </div>
               <div>
                 <p className="font-ar text-xs text-[#E8D58A] tracking-wide mb-0.5">
@@ -220,7 +220,28 @@ export const PublicFooter: React.FC<PublicFooterProps> = ({
             <div className="space-y-2.5 text-xs text-[#F7F4EC]/85">
               <div className="flex items-start gap-2.5">
                 <MapPin className="w-4 h-4 text-[#D9B64C] shrink-0 mt-0.5" />
-                <span className="leading-relaxed">{addressText}</span>
+                <div className="space-y-1">
+                  <span className="leading-relaxed block">{addressText}</span>
+                  {cmsContact.mapLink &&
+                    !cmsContact.mapLink.includes('Uttara+Dhaka') && (
+                      <a
+                        href={cmsContact.mapLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-testid="footer-map-link"
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#E8D58A] hover:underline"
+                      >
+                        <span>
+                          {language === 'bn'
+                            ? 'গুগল ম্যাপে দেখুন'
+                            : language === 'ar'
+                              ? 'عرض على خرائط جوجل'
+                              : 'View on Google Maps'}
+                        </span>
+                        <ArrowRight className="w-3 h-3" />
+                      </a>
+                    )}
+                </div>
               </div>
               <div className="flex items-center gap-2.5">
                 <Phone className="w-4 h-4 text-[#D9B64C] shrink-0" />
@@ -234,6 +255,24 @@ export const PublicFooter: React.FC<PublicFooterProps> = ({
                   {cmsContact.email || settings.email || 'office@ummulquranmadrasa.edu.bd'}
                 </span>
               </div>
+              {cmsContact.facebookUrl && cmsContact.facebookUrl.trim() !== '' && (
+                <div className="flex items-center gap-2.5">
+                  <ArrowRight className="w-4 h-4 text-[#D9B64C] shrink-0" />
+                  <a
+                    href={cmsContact.facebookUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    data-testid="footer-facebook-link"
+                    className="text-[#E8D58A] hover:underline font-semibold truncate"
+                  >
+                    {language === 'bn'
+                      ? 'অফিশিয়াল ফেসবুক পেজ'
+                      : language === 'ar'
+                        ? 'صفحة فيسبوك الرسمية'
+                        : 'Official Facebook Page'}
+                  </a>
+                </div>
+              )}
               <div className="flex items-start gap-2.5">
                 <Clock className="w-4 h-4 text-[#D9B64C] shrink-0 mt-0.5" />
                 <span className="text-[#9CA9B8]">{officeHoursText}</span>

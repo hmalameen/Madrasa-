@@ -196,103 +196,23 @@ function localizeAuthValidationErrors(
 
 function MadrasaGoldenCrest() {
   return (
-    <div className="relative mx-auto flex items-center justify-center w-20 h-20 sm:w-28 sm:h-28 lg:w-32 lg:h-32">
+    <div
+      data-testid="login-official-logo"
+      className="relative mx-auto flex items-center justify-center w-24 h-24 sm:w-32 sm:h-32 lg:w-36 lg:h-36 select-none"
+    >
       {/* Ambient golden-emerald radial halo */}
       <div
         className="absolute inset-0 rounded-full bg-radial from-[#E5B84B]/30 via-[#10B981]/15 to-transparent blur-xl animate-uqcm-glow pointer-events-none"
         aria-hidden="true"
       />
-      <svg
-        viewBox="0 0 160 160"
-        className="w-full h-full drop-shadow-[0_6px_20px_rgba(229,184,75,0.35)]"
-        fill="none"
-        aria-hidden="true"
-      >
-        <defs>
-          <linearGradient id="uqcmGoldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#FFF2B2" />
-            <stop offset="45%" stopColor="#E5B84B" />
-            <stop offset="100%" stopColor="#B38222" />
-          </linearGradient>
-          <linearGradient id="uqcmEmeraldGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stopColor="#10B981" />
-            <stop offset="100%" stopColor="#044E36" />
-          </linearGradient>
-        </defs>
-
-        {/* Outer ornate Islamic pointed arch shield */}
-        <path
-          d="M80 10 C112 28, 136 52, 136 88 C136 122, 112 142, 80 150 C48 142, 24 122, 24 88 C24 52, 48 28, 80 10 Z"
-          fill="url(#uqcmEmeraldGrad)"
-          fillOpacity="0.85"
-          stroke="url(#uqcmGoldGrad)"
-          strokeWidth="3"
-        />
-        <path
-          d="M80 18 C107 34, 128 55, 128 87 C128 116, 107 134, 80 142 C53 134, 32 116, 32 87 C32 55, 53 34, 80 18 Z"
-          stroke="url(#uqcmGoldGrad)"
-          strokeWidth="1.2"
-          strokeDasharray="3 3"
-          opacity="0.8"
-        />
-
-        {/* Top Crescent & Finial Spire */}
-        <circle cx="80" cy="29" r="5" stroke="url(#uqcmGoldGrad)" strokeWidth="1.8" />
-        <path d="M80 20 L80 25" stroke="url(#uqcmGoldGrad)" strokeWidth="1.8" />
-
-        {/* Central Mosque Dome & Twin Minarets */}
-        <path
-          d="M56 76 C56 54, 67 42, 80 35 C93 42, 104 54, 104 76 Z"
-          fill="url(#uqcmGoldGrad)"
-          fillOpacity="0.92"
-        />
-        {/* Left & Right Minarets */}
-        <rect x="44" y="48" width="6" height="30" rx="2" fill="url(#uqcmGoldGrad)" />
-        <path d="M44 48 L47 40 L50 48 Z" fill="url(#uqcmGoldGrad)" />
-        <rect x="110" y="48" width="6" height="30" rx="2" fill="url(#uqcmGoldGrad)" />
-        <path d="M110 48 L113 40 L116 48 Z" fill="url(#uqcmGoldGrad)" />
-
-        {/* Arch doorway inside dome */}
-        <path
-          d="M73 76 L73 63 C73 58, 87 58, 87 63 L87 76 Z"
-          fill="#052E22"
-        />
-
-        {/* Radiating light rays above Open Quran */}
-        <path
-          d="M80 78 L64 68 M80 78 L96 68 M80 78 L80 62"
-          stroke="#FFF2B2"
-          strokeWidth="1.3"
-          strokeLinecap="round"
-          opacity="0.75"
-        />
-
-        {/* Open Holy Quran Pages */}
-        <path
-          d="M44 86 C58 84, 70 88, 80 95 C90 88, 102 84, 116 86 L116 112 C102 110, 90 114, 80 121 C70 114, 58 110, 44 112 Z"
-          fill="#04281E"
-          stroke="url(#uqcmGoldGrad)"
-          strokeWidth="2.4"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M48 90 C60 88, 71 92, 80 98 C89 92, 100 88, 112 90 L112 108 C100 106, 89 110, 80 116 C71 110, 60 106, 48 108 Z"
-          fill="url(#uqcmGoldGrad)"
-          fillOpacity="0.22"
-          stroke="url(#uqcmGoldGrad)"
-          strokeWidth="1.2"
-        />
-        {/* Spine line */}
-        <path d="M80 95 L80 121" stroke="url(#uqcmGoldGrad)" strokeWidth="2" />
-
-        {/* Rehal (Book stand) base */}
-        <path
-          d="M56 124 L80 115 L104 124 M64 129 L96 129"
-          stroke="url(#uqcmGoldGrad)"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-        />
-      </svg>
+      <img
+        src="/assets/branding/Ummul_Quran_Cadet_Madrasa_Clean_Logo_Transparent.png"
+        alt="উম্মুল কুরআন ক্যাডেট মাদ্রাসা অফিশিয়াল লোগো | Ummul Quran Cadet Madrasa Official Logo"
+        width={1254}
+        height={1254}
+        decoding="async"
+        className="relative z-10 w-full h-full object-contain drop-shadow-[0_8px_24px_rgba(229,184,75,0.35)]"
+      />
     </div>
   );
 }

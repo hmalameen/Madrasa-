@@ -4160,6 +4160,39 @@ export function WebsiteCmsModule({
             </div>
           </div>
 
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                হোয়াটসঅ্যাপ নম্বর (WhatsApp Number)
+              </label>
+              <input
+                type="text"
+                data-testid="cms-contact-whatsapp"
+                value={contactForm.whatsappNumber || ''}
+                onChange={(e) =>
+                  setContactForm((prev) => ({ ...prev, whatsappNumber: e.target.value }))
+                }
+                placeholder="+880 19..."
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                অফিশিয়াল ফেসবুক পেজ লিংক (Official Facebook URL)
+              </label>
+              <input
+                type="url"
+                data-testid="cms-contact-facebook"
+                value={contactForm.facebookUrl || ''}
+                onChange={(e) =>
+                  setContactForm((prev) => ({ ...prev, facebookUrl: e.target.value }))
+                }
+                placeholder="https://facebook.com/..."
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-mono"
+              />
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">

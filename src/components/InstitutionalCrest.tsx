@@ -2,54 +2,29 @@ import React from 'react';
 import { AlertTriangle, Globe, X } from 'lucide-react';
 import type { Language } from '../types/madrasa';
 
-export function InstitutionalCrest({ className = 'w-11 h-11' }: { className?: string }) {
+export const OFFICIAL_LOGO_PATH =
+  '/assets/branding/Ummul_Quran_Cadet_Madrasa_Clean_Logo_Transparent.png';
+
+export function InstitutionalCrest({
+  className = 'w-11 h-11',
+  alt = 'উম্মুল কুরআন ক্যাডেট মাদ্রাসা অফিশিয়াল লোগো | Ummul Quran Cadet Madrasa Official Logo',
+}: {
+  className?: string;
+  alt?: string;
+}) {
   return (
     <div
       className={`relative inline-flex items-center justify-center shrink-0 select-none ${className}`}
-      aria-hidden="true"
+      data-testid="official-institutional-logo"
     >
-      <svg viewBox="0 0 64 64" fill="none" className="w-full h-full">
-        {/* Outer Octagonal / Lobed Islamic Emblem Frame */}
-        <polygon
-          points="32,3 44,8 56,8 56,20 61,32 56,44 56,56 44,56 32,61 20,56 8,56 8,44 3,32 8,20 8,8 20,8"
-          fill="#EBF7F1"
-          stroke="#0A6847"
-          strokeWidth="2.8"
-          strokeLinejoin="round"
-        />
-        <polygon
-          points="32,7 42.5,11.5 52.5,11.5 52.5,21.5 57,32 52.5,42.5 52.5,52.5 42.5,52.5 32,57 21.5,52.5 11.5,52.5 11.5,42.5 7,32 11.5,21.5 11.5,11.5 21.5,11.5"
-          fill="none"
-          stroke="#0A6847"
-          strokeWidth="1"
-          strokeOpacity="0.45"
-        />
-        {/* Left & Right Minarets */}
-        <rect x="17" y="23" width="3.5" height="21" rx="1" fill="#0A6847" />
-        <path d="M16.5 23L18.75 18L21 23H16.5Z" fill="#0A6847" />
-        <rect x="43.5" y="23" width="3.5" height="21" rx="1" fill="#0A6847" />
-        <path d="M43 23L45.25 18L47.5 23H43Z" fill="#0A6847" />
-        {/* Central Mosque Dome */}
-        <path
-          d="M23 34C23 27.5 27 23 32 20.5C37 23 41 27.5 41 34H23Z"
-          fill="#0A6847"
-        />
-        {/* Crescent finial on top of dome */}
-        <line x1="32" y1="16" x2="32" y2="20.5" stroke="#0A6847" strokeWidth="1.6" strokeLinecap="round" />
-        <circle cx="32" cy="15.5" r="1.3" fill="#D4AF37" />
-        {/* Mosque Base & Arched Doorways */}
-        <rect x="22" y="34" width="20" height="10" rx="1" fill="#0A6847" />
-        <path d="M29.5 44V39C29.5 37.5 30.6 36.5 32 36.5C33.4 36.5 34.5 37.5 34.5 39V44H29.5Z" fill="#EBF7F1" />
-        <path d="M24.5 44V40.5C24.5 39.7 25.1 39 26 39C26.9 39 27.5 39.7 27.5 40.5V44H24.5Z" fill="#EBF7F1" />
-        <path d="M36.5 44V40.5C36.5 39.7 37.1 39 38 39C38.9 39 39.5 39.7 39.5 40.5V44H36.5Z" fill="#EBF7F1" />
-        {/* Open Book Curve Beneath Mosque */}
-        <path
-          d="M16 46.5C21 45 26.5 45.5 32 47.5C37.5 45.5 43 45 48 46.5"
-          stroke="#0A6847"
-          strokeWidth="2"
-          strokeLinecap="round"
-        />
-      </svg>
+      <img
+        src={OFFICIAL_LOGO_PATH}
+        alt={alt}
+        width={1254}
+        height={1254}
+        decoding="async"
+        className="w-full h-full object-contain drop-shadow-[0_2px_6px_rgba(4,12,24,0.28)]"
+      />
     </div>
   );
 }

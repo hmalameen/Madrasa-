@@ -247,8 +247,8 @@ export const PublicNavbar: React.FC<PublicNavbarProps> = ({
             data-testid="public-brand-home-btn"
             className="flex items-center gap-3 text-left group focus:outline-none focus-visible:ring-2 focus-visible:ring-[#D9B64C] rounded-xl py-1 min-w-0 cursor-pointer"
           >
-            <div className="relative w-11 h-11 sm:w-12 sm:h-12 rounded-xl bg-gradient-to-br from-[#F7F4EC] to-[#E8D58A] p-0.5 shadow-[0_6px_20px_rgba(217,182,76,0.28)] ring-1 ring-[#D9B64C]/60 shrink-0 transition-transform duration-200 group-hover:scale-[1.03] flex items-center justify-center">
-              <InstitutionalCrest className="w-10 h-10 sm:w-11 sm:h-11" />
+            <div className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-[#0A1B33]/60 p-0.5 shadow-[0_6px_20px_rgba(217,182,76,0.28)] ring-1 ring-[#D9B64C]/50 shrink-0 transition-transform duration-200 group-hover:scale-[1.03] flex items-center justify-center">
+              <InstitutionalCrest className="w-full h-full" />
             </div>
 
             <div className="min-w-0">

@@ -307,31 +307,40 @@ export const PublicHomePage: React.FC<PublicHomePageProps> = ({
                     </span>
                   </div>
 
-                  <div className="space-y-2.5">
-                    <h1
-                      data-testid="hero-institution-title-bn"
-                      className="font-display-bn text-3xl sm:text-4xl lg:text-[42px] font-bold tracking-tight text-[#F7F4EC] leading-[1.24]"
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-5">
+                    <div
+                      data-testid="hero-official-logo-badge"
+                      className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-[#0A1B33]/75 p-1 shadow-[0_12px_32px_rgba(217,182,76,0.28)] ring-1 ring-[#D9B64C]/55 shrink-0 flex items-center justify-center"
                     >
-                      {pickLang(
-                        settings.institutionNameBn || 'উম্মুল কুরআন ক্যাডেট মাদ্রাসা',
-                        settings.institutionNameEn || 'Ummul Quran Cadet Madrasa',
-                        settings.institutionNameAr || 'مدرسة أم القرآن كاديت الإسلامية'
-                      )}
-                    </h1>
+                      <InstitutionalCrest className="w-full h-full" />
+                    </div>
 
-                    <p
-                      data-testid="hero-institution-title-en"
-                      className="font-display-en text-lg sm:text-xl lg:text-2xl font-semibold text-[#E8D58A] tracking-wide"
-                    >
-                      {pickLang(
-                        heroSection?.titleBn ||
-                          'কুরআনের নূর, সুন্নাহর আদব ও আধুনিক ক্যাডেট শিক্ষার সমন্বিত দ্বীনি শিক্ষাপ্রতিষ্ঠান',
-                        heroSection?.titleEn ||
-                          'Illuminated by the Noble Quran, Grounded in Sunnah & Integrated Cadet Excellence',
-                        heroSection?.titleAr ||
-                          'منارة قرآنية تجمع بين علوم الشريعة والتربية النبوية والتعليم الأكاديمي المتكامل'
-                      )}
-                    </p>
+                    <div className="space-y-2">
+                      <h1
+                        data-testid="hero-institution-title-bn"
+                        className="font-display-bn text-3xl sm:text-4xl lg:text-[42px] font-bold tracking-tight text-[#F7F4EC] leading-[1.24]"
+                      >
+                        {pickLang(
+                          settings.institutionNameBn || 'উম্মুল কুরআন ক্যাডেট মাদ্রাসা',
+                          settings.institutionNameEn || 'Ummul Quran Cadet Madrasa',
+                          settings.institutionNameAr || 'مدرسة أم القرآن كاديت الإسلامية'
+                        )}
+                      </h1>
+
+                      <p
+                        data-testid="hero-institution-title-en"
+                        className="font-display-en text-lg sm:text-xl lg:text-2xl font-semibold text-[#E8D58A] tracking-wide"
+                      >
+                        {pickLang(
+                          heroSection?.titleBn ||
+                            'কুরআনের নূর, সুন্নাহর আদব ও আধুনিক ক্যাডেট শিক্ষার সমন্বিত দ্বীনি শিক্ষাপ্রতিষ্ঠান',
+                          heroSection?.titleEn ||
+                            'Illuminated by the Noble Quran, Grounded in Sunnah & Integrated Cadet Excellence',
+                          heroSection?.titleAr ||
+                            'منارة قرآنية تجمع بين علوم الشريعة والتربية النبوية والتعليم الأكاديمي المتكامل'
+                        )}
+                      </p>
+                    </div>
                   </div>
 
                   <p className="text-sm sm:text-base lg:text-[17px] text-[#F7F4EC]/88 leading-relaxed max-w-2xl">
@@ -584,8 +593,8 @@ export const PublicHomePage: React.FC<PublicHomePageProps> = ({
                 <div className="lg:col-span-5">
                   <div className="uqcm-royal-panel rounded-2xl p-6 sm:p-8 text-[#F7F4EC] relative overflow-hidden">
                     <div className="flex items-center gap-4 pb-6 border-b border-[#D9B64C]/25">
-                      <div className="w-16 h-16 rounded-xl bg-white p-1.5 shadow-md ring-2 ring-[#D9B64C]/60 shrink-0 flex items-center justify-center">
-                        <InstitutionalCrest className="w-13 h-13" />
+                      <div className="w-16 h-16 sm:w-18 sm:h-18 rounded-full bg-[#0A1B33]/80 p-1 shadow-[0_8px_24px_rgba(217,182,76,0.25)] ring-1 ring-[#D9B64C]/60 shrink-0 flex items-center justify-center">
+                        <InstitutionalCrest className="w-full h-full" />
                       </div>
                       <div>
                         <p className="text-[11px] font-bold uppercase tracking-widest text-[#E8D58A]">
@@ -2035,6 +2044,25 @@ export const PublicHomePage: React.FC<PublicHomePageProps> = ({
                       cmsContact.addressAr
                     )}
                   </p>
+                  {cmsContact.mapLink &&
+                    !cmsContact.mapLink.includes('Uttara+Dhaka') && (
+                      <a
+                        href={cmsContact.mapLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        data-testid="home-contact-map-link"
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-[#E8D58A] hover:underline pt-1"
+                      >
+                        <span>
+                          {pickLang(
+                            'গুগল ম্যাপে অবস্থান দেখুন',
+                            'View Location on Google Maps',
+                            'عرض الموقع على خرائط جوجل'
+                          )}
+                        </span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </a>
+                    )}
                 </div>
 
                 <div className="rounded-2xl bg-[#061326]/90 border border-[#D9B64C]/30 p-6 space-y-3">
@@ -2045,11 +2073,12 @@ export const PublicHomePage: React.FC<PublicHomePageProps> = ({
                   <p className="font-mono-num text-sm font-bold text-[#F7F4EC]">
                     {cmsContact.phone || settings.phone || '+880 1711-984321'}
                   </p>
-                  {cmsContact.whatsappNumber && (
-                    <p className="font-mono-num text-xs text-[#9CA9B8]">
-                      WhatsApp: {cmsContact.whatsappNumber}
-                    </p>
-                  )}
+                  {cmsContact.whatsappNumber &&
+                    cmsContact.whatsappNumber !== '+8801711984321' && (
+                      <p className="font-mono-num text-xs text-[#9CA9B8]">
+                        WhatsApp: {cmsContact.whatsappNumber}
+                      </p>
+                    )}
                 </div>
 
                 <div className="rounded-2xl bg-[#061326]/90 border border-[#D9B64C]/30 p-6 space-y-3">
@@ -2060,6 +2089,24 @@ export const PublicHomePage: React.FC<PublicHomePageProps> = ({
                   <p className="text-xs sm:text-sm font-semibold text-[#F7F4EC] break-all">
                     {cmsContact.email || settings.email || 'office@ummulquranmadrasa.edu.bd'}
                   </p>
+                  {cmsContact.facebookUrl && cmsContact.facebookUrl.trim() !== '' && (
+                    <a
+                      href={cmsContact.facebookUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      data-testid="home-contact-facebook-link"
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-[#E8D58A] hover:underline pt-1"
+                    >
+                      <span>
+                        {pickLang(
+                          'অফিশিয়াল ফেসবুক পেজ',
+                          'Official Facebook Page',
+                          'صفحة فيسبوك الرسمية'
+                        )}
+                      </span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </a>
+                  )}
                 </div>
 
                 <div className="rounded-2xl bg-[#061326]/90 border border-[#D9B64C]/30 p-6 space-y-3">

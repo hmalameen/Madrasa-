@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   ArrowLeft,
+  ArrowRight,
   Calendar,
   CheckCircle2,
   Clock,
@@ -454,8 +455,8 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
               <div className="lg:col-span-5">
                 <div className="uqcm-royal-panel rounded-2xl p-6 sm:p-8 text-[#F7F4EC] space-y-6">
                   <div className="flex items-center gap-4 border-b border-[#D9B64C]/25 pb-5">
-                    <div className="w-14 h-14 rounded-xl bg-white p-1 shrink-0 ring-2 ring-[#D9B64C]/50 flex items-center justify-center">
-                      <InstitutionalCrest className="w-12 h-12" />
+                    <div className="w-16 h-16 rounded-full bg-[#0A1B33]/80 p-1 shrink-0 ring-1 ring-[#D9B64C]/55 flex items-center justify-center">
+                      <InstitutionalCrest className="w-full h-full" />
                     </div>
                     <div>
                       <p className="text-[11px] font-bold uppercase tracking-widest text-[#E8D58A]">
@@ -997,7 +998,51 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
             onBackHome={() => onNavigatePage('/')}
           />
 
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 space-y-10">
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 space-y-8">
+            <div
+              data-testid="admission-page-official-identity"
+              className="uqcm-royal-panel rounded-2xl p-5 sm:p-6 text-[#F7F4EC] flex flex-col sm:flex-row items-center justify-between gap-4 border border-[#D9B64C]/35"
+            >
+              <div className="flex items-center gap-4 text-center sm:text-left">
+                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#0A1B33]/85 p-1 ring-1 ring-[#D9B64C]/60 shadow-[0_8px_24px_rgba(217,182,76,0.25)] shrink-0 flex items-center justify-center">
+                  <InstitutionalCrest className="w-full h-full" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-bold uppercase tracking-widest text-[#E8D58A]">
+                    {pickLang(
+                      `অনলাইন ভর্তি দপ্তর · শিক্ষাবর্ষ ${settings.academicYear || '২০২৬-২০২৭'}`,
+                      `Official Admission Desk · Session ${settings.academicYear || '2026-2027'}`,
+                      `مكتب القبول الرسمي · العام الدراسي ${settings.academicYear || '2026-2027'}`
+                    )}
+                  </p>
+                  <h2 className="font-display-bn text-lg sm:text-2xl font-bold text-[#F7F4EC] mt-0.5">
+                    {pickLang(
+                      settings.institutionNameBn || 'উম্মুল কুরআন ক্যাডেট মাদ্রাসা',
+                      settings.institutionNameEn || 'Ummul Quran Cadet Madrasa',
+                      settings.institutionNameAr || 'مدرسة أم القرآن كاديت الإسلامية'
+                    )}
+                  </h2>
+                  <p className="text-xs text-[#9CA9B8] mt-0.5">
+                    {pickLang(
+                      'নূরানী · নাজেরা · হিফজুল কুরআন · কিতাব · জেনারেল ক্যাডেট বিভাগ',
+                      'Noorani · Nazera · Hifzul Quran · Kitab · General Cadet Streams',
+                      'النوراني · الناظرة · تحفيظ القرآن · الكتاب · الكاديت العام'
+                    )}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-xs font-semibold text-[#E8D58A] bg-[#061326]/70 px-3.5 py-2 rounded-xl border border-[#D9B64C]/30 shrink-0">
+                <CheckCircle2 className="w-4 h-4 text-[#087A59]" />
+                <span>
+                  {pickLang(
+                    'অফিশিয়াল অনলাইন ভর্তি পোর্টাল',
+                    'Verified Online Admission Portal',
+                    'بوابة القبول الإلكتروني المعتمدة'
+                  )}
+                </span>
+              </div>
+            </div>
+
             <div
               data-testid="public-admission-form-container"
               className="rounded-2xl bg-white border border-[#D9B64C]/35 p-4 sm:p-8 shadow-lg"
@@ -1414,6 +1459,25 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                             cmsContact.addressAr
                           )}
                         </p>
+                        {cmsContact.mapLink &&
+                          !cmsContact.mapLink.includes('Uttara+Dhaka') && (
+                            <a
+                              href={cmsContact.mapLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              data-testid="contact-page-map-link"
+                              className="inline-flex items-center gap-1 text-xs font-semibold text-[#E8D58A] hover:underline mt-1.5"
+                            >
+                              <span>
+                                {pickLang(
+                                  'গুগল ম্যাপে ক্যাম্পাসের অবস্থান দেখুন',
+                                  'Open Campus Location in Google Maps',
+                                  'افتح موقع الحرم المدرسي في خرائط جوجل'
+                                )}
+                              </span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </a>
+                          )}
                       </div>
                     </div>
 
@@ -1426,6 +1490,12 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         <p className="font-mono-num text-[#F7F4EC] font-semibold mt-0.5">
                           {cmsContact.phone || settings.phone || '+880 1711-984321'}
                         </p>
+                        {cmsContact.whatsappNumber &&
+                          cmsContact.whatsappNumber !== '+8801711984321' && (
+                            <p className="font-mono-num text-xs text-[#9CA9B8] mt-0.5">
+                              WhatsApp: {cmsContact.whatsappNumber}
+                            </p>
+                          )}
                       </div>
                     </div>
 
@@ -1438,6 +1508,24 @@ export const PublicPages: React.FC<PublicPagesProps> = ({
                         <p className="text-[#F7F4EC] mt-0.5 break-all">
                           {cmsContact.email || settings.email || 'office@ummulquranmadrasa.edu.bd'}
                         </p>
+                        {cmsContact.facebookUrl && cmsContact.facebookUrl.trim() !== '' && (
+                          <a
+                            href={cmsContact.facebookUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            data-testid="contact-page-facebook-link"
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-[#E8D58A] hover:underline mt-1.5"
+                          >
+                            <span>
+                              {pickLang(
+                                'অফিশিয়াল ফেসবুক পেজ ভিজিট করুন',
+                                'Visit Official Facebook Page',
+                                'زيارة صفحة فيسبوك الرسمية'
+                              )}
+                            </span>
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </a>
+                        )}
                       </div>
                     </div>
 
