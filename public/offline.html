@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="bn" dir="ltr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#061326" />
+    <title>অফলাইন মোড | Ummul Quran Cadet Madrasa</title>
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: radial-gradient(circle at 50% 20%, #0a1b33 0%, #061326 70%);
+        color: #f7f4ec;
+        font-family: system-ui, -apple-system, 'Hind Siliguri', 'Noto Sans Bengali', sans-serif;
+      }
+      .card {
+        max-width: 520px;
+        width: 100%;
+        background: rgba(10, 27, 51, 0.92);
+        border: 1px solid rgba(217, 182, 76, 0.4);
+        border-radius: 20px;
+        padding: 32px 24px;
+        text-align: center;
+        box-shadow: 0 24px 48px rgba(0, 0, 0, 0.55);
+      }
+      .logo {
+        width: 88px;
+        height: 88px;
+        object-fit: contain;
+        margin: 0 auto 16px;
+        display: block;
+      }
+      .bismillah {
+        color: #e8d58a;
+        font-size: 14px;
+        margin-bottom: 8px;
+      }
+      h1 {
+        font-size: 22px;
+        color: #f7f4ec;
+        margin-bottom: 6px;
+      }
+      .subtitle {
+        font-size: 14px;
+        color: #e8d58a;
+        font-weight: 600;
+        margin-bottom: 18px;
+      }
+      .message {
+        font-size: 14px;
+        line-height: 1.65;
+        color: rgba(247, 244, 236, 0.86);
+        margin-bottom: 14px;
+      }
+      .security-note {
+        font-size: 12px;
+        line-height: 1.55;
+        color: #9ca9b8;
+        background: rgba(6, 19, 38, 0.75);
+        border: 1px solid rgba(217, 182, 76, 0.22);
+        border-radius: 12px;
+        padding: 12px 14px;
+        margin-bottom: 22px;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 11px 22px;
+        border-radius: 12px;
+        border: 1px solid rgba(217, 182, 76, 0.55);
+        background: #087a59;
+        color: #f7f4ec;
+        font-weight: 700;
+        font-size: 13px;
+        cursor: pointer;
+        text-decoration: none;
+      }
+      .btn:hover {
+        background: #064b3a;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card" data-testid="offline-fallback-card">
+      <img
+        src="/assets/branding/Ummul_Quran_Cadet_Madrasa_Clean_Logo_Transparent.png"
+        alt="Ummul Quran Cadet Madrasa Official Logo"
+        class="logo"
+      />
+      <p class="bismillah">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</p>
+      <h1>উম্মুল কুরআন ক্যাডেট মাদ্রাসা</h1>
+      <p class="subtitle">Ummul Quran Cadet Madrasa · مدرسة أم القرآن كاديت</p>
+      <p class="message">
+        আপনার ডিভাইসে বর্তমানে ইন্টারনেট সংযোগ নেই। সংযোগ পুনরায় চালু হলে পেজটি রিলোড করুন।<br />
+        You are currently offline. Please check your internet connection and try again.<br />
+        أنت غير متصل بالإنترنت حالياً. يرجى التحقق من الاتصال والمحاولة مرة أخرى.
+      </p>
+      <div class="security-note">
+        নিরাপত্তার স্বার্থে শিক্ষার্থী, অভিভাবক, উপস্থিতি, ফলাফল, ফি ও প্রশাসনিক পোর্টালের কোনো ব্যক্তিগত তথ্য অফলাইনে সংরক্ষণ করা হয় না।<br />
+        For security and privacy, student records, marksheets, fees, and portal dashboards are never cached offline.
+      </div>
+      <button type="button" class="btn" onclick="window.location.reload()">
+        পুনরায় চেষ্টা করুন · Retry Connection
+      </button>
+    </main>
+  </body>
+</html>

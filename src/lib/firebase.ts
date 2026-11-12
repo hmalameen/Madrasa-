@@ -375,6 +375,15 @@ export async function reloadAndCheckEmailVerified(targetUser?: User | null): Pro
 }
 
 export async function signOutUser() {
+  if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+    try {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'CLEAR_SENSITIVE_CACHES',
+      });
+    } catch {
+      // Ignore postMessage errors
+    }
+  }
   return firebaseSignOut(auth);
 }
 

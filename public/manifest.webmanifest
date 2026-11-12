@@ -1,11 +1,13 @@
 {
-  "name": "উম্মুল কুরআন ক্যাডেট মাদ্রাসা | Ummul Quran Cadet Madrasa",
-  "short_name": "উম্মুল কুরআন মাদ্রাসা",
-  "description": "কুরআন, সুন্নাহ ও আধুনিক শিক্ষার সমন্বিত দ্বীনি শিক্ষাপ্রতিষ্ঠান | Integrated Quranic, Sunnah & Modern Cadet Education",
+  "id": "/",
+  "name": "Ummul Quran Cadet Madrasa",
+  "short_name": "Ummul Quran",
+  "description": "উম্মুল কুরআন ক্যাডেট মাদ্রাসা — কুরআন, সুন্নাহ ও আধুনিক শিক্ষার সমন্বিত দ্বীনি শিক্ষাপ্রতিষ্ঠান | Integrated Quranic, Sunnah & Modern Cadet Education",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#061326",
   "theme_color": "#061326",
+  "background_color": "#F7F4EC",
   "icons": [
     {
       "src": "/assets/branding/icon-192x192.png",

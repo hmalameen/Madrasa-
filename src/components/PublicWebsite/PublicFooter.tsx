@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { InstitutionSettings, Language, WebsiteCmsConfig } from '../../types/madrasa';
 import { InstitutionalCrest } from '../InstitutionalCrest';
+import { PWAInstallButton } from '../PWAInstallManager';
 import { PublicPagePath, PUBLIC_NAV_ITEMS } from './PublicNavbar';
 import { getPublishedContactFooter } from '../../utils/websiteCmsLogic';
 
@@ -327,6 +328,8 @@ export const PublicFooter: React.FC<PublicFooterProps> = ({
                   </>
                 )}
               </button>
+
+              <PWAInstallButton language={language} variant="footer" />
             </div>
           </div>
         </div>

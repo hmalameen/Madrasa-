@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { InstitutionSettings, Language } from '../../types/madrasa';
 import { InstitutionalCrest } from '../InstitutionalCrest';
+import { PWAInstallButton, PWASystemStatusBanner } from '../PWAInstallManager';
 
 export type PublicPagePath =
   | '/'
@@ -383,6 +384,8 @@ export const PublicNavbar: React.FC<PublicNavbarProps> = ({
               ))}
             </div>
 
+            <PWAInstallButton language={language} variant="navbar" />
+
             <button
               type="button"
               onClick={onOpenOnlineAdmission}
@@ -540,9 +543,12 @@ export const PublicNavbar: React.FC<PublicNavbarProps> = ({
                 </>
               )}
             </button>
+            <PWAInstallButton language={language} variant="mobile" />
           </div>
         </div>
       )}
+
+      <PWASystemStatusBanner language={language} />
     </header>
   );
 };
