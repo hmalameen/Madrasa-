@@ -2285,9 +2285,9 @@ export function ExamsModule({
             </div>
 
             <div className="space-y-3 max-h-[540px] overflow-y-auto pr-1">
-              {activeAuditLogs.map((log) => (
+              {activeAuditLogs.map((log, idx) => (
                 <div
-                  key={log.id}
+                  key={log.id ? `${log.id}-${idx}` : `exam-log-${idx}`}
                   className="p-3.5 rounded-lg border border-stone-200 bg-stone-50/70 space-y-1 text-xs"
                 >
                   <div className="flex items-center justify-between">

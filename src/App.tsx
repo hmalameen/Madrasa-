@@ -124,6 +124,7 @@ import {
   resolveCanonicalStudentAuthEmail,
   resolveGuardianVerificationMethod,
   resolvePostLoginRedirect,
+  sanitizeAdmissionApplicationForFirestore,
   type StaffInvitationInput,
   validateAndRedeemActivationInvitation,
   validateInstitutionSettings,
@@ -473,7 +474,8 @@ export function MadrasaPortalApp() {
     actorEmailOverride?: string;
     actorRoleOverride?: UserRole;
   }) => {
-    const id = `aud-${Date.now()}`;
+    const randomSuffix = Math.random().toString(36).slice(2, 8);
+    const id = `aud-${Date.now()}-${randomSuffix}`;
     const nowIso = new Date().toISOString();
     const actorUid =
       entry.actorUidOverride ||
@@ -524,7 +526,7 @@ export function MadrasaPortalApp() {
       }
     }
 
-    setAdminAuditLogs((prev) => [newLog, ...prev]);
+    setAdminAuditLogs((prev) => [newLog, ...prev.filter((item) => item.id !== newLog.id)]);
   };
 
   const reportDatabaseError = (
@@ -3371,9 +3373,9 @@ export function MadrasaPortalApp() {
 
     if (firebaseUser) {
       try {
+        const sanitized = sanitizeAdmissionApplicationForFirestore(payload, uid);
         await setDoc(doc(db, 'admissionApplications', id), {
-          ...payload,
-          authorId: uid,
+          ...sanitized,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -3394,9 +3396,16 @@ export function MadrasaPortalApp() {
     ) {
       // Best-effort unauthenticated public write allowed by firestore.rules
       try {
+        const sanitizedPublic = sanitizeAdmissionApplicationForFirestore(
+          {
+            ...payload,
+            applicantUid: '',
+            guardianUid: '',
+          },
+          'public-applicant'
+        );
         await setDoc(doc(db, 'admissionApplications', id), {
-          ...payload,
-          authorId: 'public-applicant',
+          ...sanitizedPublic,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -3432,20 +3441,21 @@ export function MadrasaPortalApp() {
       const appRef = doc(db, 'admissionApplications', applicationId);
       try {
         const snap = await getExistingDocIfPresent(appRef);
-        const { id, isDemoRecord, createdAt, updatedAt, ...cleanPayload } = merged;
-        if (snap) {
-          await updateDoc(appRef, {
-            ...cleanPayload,
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          await setDoc(appRef, {
-            ...cleanPayload,
-            authorId: firebaseUser.uid,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        }
+        const existingData = snap?.data() as Record<string, unknown> | undefined;
+        const resolvedAuthorId = canApproveAdmissions(activeRole)
+          ? firebaseUser.uid
+          : (typeof existingData?.authorId === 'string' && existingData.authorId) ||
+            firebaseUser.uid;
+        const sanitized = sanitizeAdmissionApplicationForFirestore(merged, resolvedAuthorId, {
+          referenceNo:
+            (typeof existingData?.referenceNo === 'string' && existingData.referenceNo) ||
+            merged.referenceNo,
+        });
+        await setDoc(appRef, {
+          ...sanitized,
+          createdAt: existingData?.createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
       } catch (err) {
         reportDatabaseError(
           err,
@@ -3578,9 +3588,14 @@ export function MadrasaPortalApp() {
         } = provisioned.studentRecord;
 
         const stuSnap = await getExistingDocIfPresent(stuRef);
+        const existingStuData = stuSnap?.data() as Record<string, unknown> | undefined;
         if (stuSnap) {
           await updateDoc(stuRef, {
             ...stuRest,
+            admissionNo:
+              (typeof existingStuData?.admissionNo === 'string' && existingStuData.admissionNo) ||
+              stuRest.admissionNo,
+            authorId: uid,
             updatedAt: serverTimestamp(),
           });
         } else {
@@ -3593,27 +3608,18 @@ export function MadrasaPortalApp() {
         }
 
         const appRef = doc(db, 'admissionApplications', finalApp.id);
-        const {
-          id: appId,
-          isDemoRecord: appDemo,
-          createdAt: appCreated,
-          updatedAt: appUpdated,
-          ...appRest
-        } = finalApp;
         const appSnap = await getExistingDocIfPresent(appRef);
-        if (appSnap) {
-          await updateDoc(appRef, {
-            ...appRest,
-            updatedAt: serverTimestamp(),
-          });
-        } else {
-          await setDoc(appRef, {
-            ...appRest,
-            authorId: uid,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          });
-        }
+        const existingAppData = appSnap?.data() as Record<string, unknown> | undefined;
+        const sanitizedAppPayload = sanitizeAdmissionApplicationForFirestore(finalApp, uid, {
+          referenceNo:
+            (typeof existingAppData?.referenceNo === 'string' && existingAppData.referenceNo) ||
+            finalApp.referenceNo,
+        });
+        await setDoc(appRef, {
+          ...sanitizedAppPayload,
+          createdAt: existingAppData?.createdAt || serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
 
         const stuInvRef = doc(db, 'accountInvitations', invPkg.studentInvitation.id);
         const {
@@ -3665,21 +3671,27 @@ export function MadrasaPortalApp() {
           }
         }
 
-        // Persist guardian account link in Firestore if guardianUid is present
+        // Persist guardian account link in Firestore if guardianUid is present and refers to a guardian profile
         if (finalApp.requestGuardianAccount && finalApp.guardianUid) {
-          const grdUserRef = doc(db, 'users', finalApp.guardianUid);
-          const grdSnap = await getExistingDocIfPresent(grdUserRef);
-          if (grdSnap) {
-            const grdData = grdSnap.data() as UserProfile;
-            const mergedIds = mergeLinkedStudentIds(
-              grdData.linkedStudentIds || '',
-              provisioned.studentRecord.id
-            );
-            await updateDoc(grdUserRef, {
-              status: 'active',
-              linkedStudentIds: mergedIds,
-              updatedAt: serverTimestamp(),
-            });
+          try {
+            const grdUserRef = doc(db, 'users', finalApp.guardianUid);
+            const grdSnap = await getExistingDocIfPresent(grdUserRef);
+            if (grdSnap) {
+              const grdData = grdSnap.data() as UserProfile;
+              if (grdData.role === 'guardian') {
+                const mergedIds = mergeLinkedStudentIds(
+                  grdData.linkedStudentIds || '',
+                  provisioned.studentRecord.id
+                );
+                await updateDoc(grdUserRef, {
+                  status: 'active',
+                  linkedStudentIds: mergedIds,
+                  updatedAt: serverTimestamp(),
+                });
+              }
+            }
+          } catch {
+            // Non-blocking guardian profile link update
           }
         }
       } catch (err) {
@@ -3747,7 +3759,7 @@ export function MadrasaPortalApp() {
       targetUid: provisioned.studentRecord.id,
       targetEmail: finalApp.guardianEmail || '',
       targetRole: 'student',
-      summaryBn: `ভর্তি আবেদন (${finalApp.applicantNameBn} · দাখিলা #${provisioned.studentRecord.admissionNo}) অনুমোদিত ও শিক্ষার্থী প্রোফাইল তৈরি হয়েছে।`,
+      summaryBn: `ভর্তি আবেদন (${finalApp.nameBn} · দাখিলা #${provisioned.studentRecord.admissionNo}) অনুমোদিত ও শিক্ষার্থী প্রোফাইল তৈরি হয়েছে।`,
     });
 
     return {
@@ -4242,6 +4254,10 @@ export function MadrasaPortalApp() {
         : `ACT-GRD-${cleanStuToken}-${suffix}`;
 
     const verMethod = resolveGuardianVerificationMethod(app);
+    const baseUrl =
+      typeof window !== 'undefined' && window.location?.origin
+        ? window.location.origin
+        : 'https://ummulquranmadrasa.edu.bd';
     const reissuedInv: AccountInvitation = {
       id: invId,
       invitationCode: newCode,
@@ -4249,13 +4265,17 @@ export function MadrasaPortalApp() {
       applicationId: app.id,
       studentId: stu.id,
       admissionNo: stu.admissionNo,
+      studentNameBn: stu.nameBn,
       recipientName: targetRole === 'student' ? stu.nameBn : app.guardianName,
       recipientPhone: normalizeBangladeshPhone(app.guardianPhone) || app.guardianPhone,
       recipientEmail:
         targetRole === 'student'
           ? resolveCanonicalStudentAuthEmail(stu.admissionNo)
           : app.guardianEmail || resolveCanonicalGuardianPhoneAuthEmail(app.guardianPhone),
+      activationUrl: `${baseUrl}/?activate=${encodeURIComponent(newCode)}`,
       status: 'pending_activation',
+      provisioningMode: 'single_use_activation_link',
+      requiresPasswordChangeOnFirstLogin: false,
       verificationMethod: verMethod,
       verificationStatus:
         targetRole === 'guardian' ? 'pending_verification' : app.guardianVerificationStatus || 'verified',
@@ -4289,23 +4309,30 @@ export function MadrasaPortalApp() {
         if (snap) {
           await updateDoc(invRef, {
             ...invPayload,
+            authorId: uid,
             updatedAt: serverTimestamp(),
           });
         } else {
           await setDoc(invRef, {
             ...invPayload,
+            authorId: uid,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
         }
 
         const appRef = doc(db, 'admissionApplications', app.id);
-        const { id: aId, isDemoRecord: aDemo, createdAt: aCr, updatedAt: aUp, ...appPayload } =
-          updatedApp;
         const appSnap = await getExistingDocIfPresent(appRef);
         if (appSnap) {
-          await updateDoc(appRef, {
-            ...appPayload,
+          const existingAppData = appSnap.data() as Record<string, unknown>;
+          const sanitizedApp = sanitizeAdmissionApplicationForFirestore(updatedApp, uid, {
+            referenceNo:
+              (typeof existingAppData.referenceNo === 'string' && existingAppData.referenceNo) ||
+              updatedApp.referenceNo,
+          });
+          await setDoc(appRef, {
+            ...sanitizedApp,
+            createdAt: existingAppData.createdAt || serverTimestamp(),
             updatedAt: serverTimestamp(),
           });
         }
@@ -4551,8 +4578,6 @@ export function MadrasaPortalApp() {
         if (existingInvSnap) {
           await updateDoc(invRef, {
             status: 'activated',
-            verificationStatus: 'verified',
-            verifiedAt: finalRedeemed.redeemedAt,
             redeemedByUid: activatedUid,
             redeemedAt: finalRedeemed.redeemedAt,
             updatedAt: serverTimestamp(),

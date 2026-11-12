@@ -2492,8 +2492,107 @@ test('Public CMS Snapshot (`settings/website-cms-public`) strips all private dra
   assert.equal(getPublishedGalleryItems(emptyPublicCfg).length, 0);
 });
 
+import { sanitizeAdmissionApplicationForFirestore } from './madrasaLogic';
 
+test('Admission Approval Firestore Sanitizer — keeps 52-field approved application strictly within 17..50 keys required by isValidAdmissionApplication', () => {
+  const fullApprovedApp: AdmissionApplication = {
+    id: 'adm-1794473087335',
+    referenceNo: 'UQCM-ADM-2026-991',
+    nameBn: 'মুহাম্মদ সাইফুল্লাহ আল-মাহমুদ',
+    nameEn: 'Muhammad Saifullah Al-Mahmud',
+    nameAr: 'محمد سيف الله المحمود',
+    dateOfBirth: '2014-05-12',
+    gender: 'male',
+    bloodGroup: 'O+',
+    birthRegNo: '20142690123456789',
+    photoUrl: 'data:image/jpeg;base64,/9j/4AAQSkZJRg==',
+    presentAddress: 'মিরপুর-১০, ঢাকা',
+    permanentAddress: 'সদর, কুমিল্লা',
+    fatherName: 'মাওলানা মাহমুদুল হাসান',
+    fatherPhone: '+8801711223344',
+    motherName: 'মিসেস খাদিজা বেগম',
+    motherPhone: '+8801811223344',
+    guardianName: 'মাওলানা মাহমুদুল হাসান',
+    guardianPhone: '+8801711223344',
+    guardianRelation: 'পিতা',
+    guardianEmail: 'guardian@example.com',
+    applicantEmail: 'student@example.com',
+    requestGuardianAccount: true,
+    guardianVerificationMethod: 'sms_otp',
+    guardianVerificationStatus: 'pending_verification',
+    guardianAccountStatus: 'pending_verification',
+    studentAccountStatus: 'pending_activation',
+    department: 'hifz',
+    requestedClass: 'হিফজুল কুরআন (প্রাথমিক)',
+    academicSession: '২০২৬-২০২৭',
+    previousInstitution: 'নূরানী তালীমুল কুরআন মাদ্রাসা',
+    previousClass: 'নাজেরা সমাপ্ত',
+    residentialStatus: 'residential',
+    medicalOrSpecialNotes: 'কোনো অ্যালার্জি নেই',
+    documentName: 'birth_certificate.pdf',
+    documentSummaryUrl: 'https://example.com/birth_certificate.pdf',
+    consentAccepted: true,
+    status: 'approved',
+    assignedStudentId: 'stu-adm-1794473087335',
+    assignedAdmissionNo: 'UQCM-2026-109',
+    assignedRollNo: 9,
+    assignedDormitoryRoom: 'দারুল আরকাম - কক্ষ ২০২',
+    assignedMonthlyFeeBdt: 5500,
+    adminRemarks: 'ভর্তি অনুমোদিত',
+    submittedDate: '2026-11-12',
+    reviewedDate: '2026-11-12',
+    reviewedByUid: 'irkwtfGd6PVGPIdVOjTSsRC9Iat1',
+    applicantUid: '',
+    guardianUid: 'grd-uid-1',
+    entrySource: 'online_public',
+    studentInvitationCode: 'ACT-STU-UQCM-2026-109-1234',
+    guardianInvitationCode: 'ACT-GRD-UQCM-2026-109-5678',
+    authorId: 'irkwtfGd6PVGPIdVOjTSsRC9Iat1',
+  };
 
+  const sanitized = sanitizeAdmissionApplicationForFirestore(
+    fullApprovedApp,
+    'irkwtfGd6PVGPIdVOjTSsRC9Iat1'
+  );
+  const simulatedFirestoreDoc: Record<string, string | number | boolean> = {
+    ...sanitized,
+    createdAt: 'TIMESTAMP_CREATED',
+    updatedAt: 'TIMESTAMP_UPDATED',
+  };
 
+  const keys = Object.keys(simulatedFirestoreDoc);
+  assert.ok(
+    keys.length >= 17 && keys.length <= 50,
+    `Expected key count between 17 and 50, got ${keys.length}`
+  );
 
+  const required17Keys = [
+    'referenceNo',
+    'nameBn',
+    'nameEn',
+    'department',
+    'requestedClass',
+    'guardianName',
+    'guardianPhone',
+    'residentialStatus',
+    'status',
+    'assignedStudentId',
+    'assignedAdmissionNo',
+    'reviewedByUid',
+    'applicantUid',
+    'guardianUid',
+    'authorId',
+    'createdAt',
+    'updatedAt',
+  ];
+  for (const reqKey of required17Keys) {
+    assert.ok(reqKey in simulatedFirestoreDoc, `Missing required key: ${reqKey}`);
+  }
 
+  assert.equal(simulatedFirestoreDoc.status, 'approved');
+  assert.equal(simulatedFirestoreDoc.assignedStudentId, 'stu-adm-1794473087335');
+  assert.equal(simulatedFirestoreDoc.assignedAdmissionNo, 'UQCM-2026-109');
+  assert.equal(simulatedFirestoreDoc.studentInvitationCode, 'ACT-STU-UQCM-2026-109-1234');
+  assert.equal(simulatedFirestoreDoc.guardianInvitationCode, 'ACT-GRD-UQCM-2026-109-5678');
+  assert.equal(simulatedFirestoreDoc.authorId, 'irkwtfGd6PVGPIdVOjTSsRC9Iat1');
+});

@@ -1163,32 +1163,42 @@ export function buildProvisionedStudentFromApplication(
   ).trim();
 
   const todayIso = new Date().toISOString().slice(0, 10);
-  const normalizedGuardianPhone = normalizeBangladeshPhone(app.guardianPhone) || app.guardianPhone.trim();
+  const normalizedGuardianPhone =
+    normalizeBangladeshPhone(app.guardianPhone) ||
+    normalizeBangladeshPhone(app.fatherPhone || '') ||
+    app.guardianPhone.trim();
+  const fallbackContact =
+    normalizedGuardianPhone ||
+    (app.guardianEmail || '').trim() ||
+    (app.fatherPhone || '').trim() ||
+    '+8801700000000';
+  const safeGuardianPhone =
+    fallbackContact.length >= 5 ? fallbackContact.slice(0, 80) : '+8801700000000';
 
   const studentRecord: Student = {
     id: canonicalId,
     admissionNo: existingMatch ? existingMatch.admissionNo : cleanAdmissionNo,
-    nameBn: app.nameBn.trim(),
-    nameEn: app.nameEn.trim(),
-    nameAr: (app.nameAr || '').trim(),
+    nameBn: (app.nameBn || app.nameEn || 'শিক্ষার্থী').trim().slice(0, 300),
+    nameEn: (app.nameEn || app.nameBn || 'Student').trim().slice(0, 300),
+    nameAr: (app.nameAr || '').trim().slice(0, 300),
     department: finalDepartment,
-    className: finalClass,
-    rollNo: finalRoll,
+    className: finalClass || 'হিফজুল কুরআন',
+    rollNo: finalRoll >= 1 ? finalRoll : 1,
     dateOfBirth: app.dateOfBirth.trim(),
     bloodGroup: (app.bloodGroup || 'O+').trim(),
     admissionDate: existingMatch?.admissionDate || todayIso,
-    guardianName: app.guardianName.trim(),
-    guardianPhone: normalizedGuardianPhone || app.guardianEmail.trim(),
-    guardianRelation: app.guardianRelation.trim(),
+    guardianName: (app.guardianName || app.fatherName || 'অভিভাবক').trim().slice(0, 300),
+    guardianPhone: safeGuardianPhone,
+    guardianRelation: (app.guardianRelation || 'পিতা').trim(),
     guardianUid: resolvedGuardianUid,
     ...(resolvedStudentUid ? { studentUid: resolvedStudentUid } : {}),
     ...(app.photoUrl ? { photoUrl: app.photoUrl } : existingMatch?.photoUrl ? { photoUrl: existingMatch.photoUrl } : {}),
     applicationId: app.id,
     residentialStatus: app.residentialStatus,
     dormitoryRoom: finalDormitory,
-    monthlyFeeBdt: finalFee,
+    monthlyFeeBdt: finalFee >= 0 ? finalFee : 0,
     status: existingMatch?.status || 'active',
-    authorId: existingMatch?.authorId || options.authorId,
+    authorId: options.authorId || existingMatch?.authorId || 'usr-muhtamim-1',
     isDemoRecord: Boolean(app.isDemoRecord),
   };
 
@@ -1196,6 +1206,128 @@ export function buildProvisionedStudentFromApplication(
     studentRecord,
     isExistingRecord: Boolean(existingMatch),
   };
+}
+
+/**
+ * Builds a Firestore-compliant AdmissionApplication payload that strictly satisfies
+ * `isValidAdmissionApplication` in `firestore.rules`:
+ * - Always includes all 15 non-timestamp required keys (17 total with createdAt + updatedAt)
+ * - Always preserves core admission & approval workflow fields
+ * - Caps total keys before timestamps at <= 46 so with createdAt + updatedAt the document
+ *   has at most 48 keys (strictly <= 50 keys limit in firestore.rules).
+ */
+export function sanitizeAdmissionApplicationForFirestore(
+  app: Omit<AdmissionApplication, 'id' | 'createdAt' | 'updatedAt' | 'authorId' | 'isDemoRecord'> &
+    Partial<Pick<AdmissionApplication, 'id' | 'authorId' | 'isDemoRecord'>>,
+  authorId: string,
+  overrides?: {
+    referenceNo?: string;
+  }
+): Record<string, string | number | boolean> {
+  const safeReferenceNo = (
+    overrides?.referenceNo ||
+    app.referenceNo ||
+    'UQCM-ADM-2026-0001'
+  )
+    .trim()
+    .slice(0, 100);
+  const safeNameBn = (app.nameBn || app.nameEn || 'শিক্ষার্থী').trim().slice(0, 300);
+  const safeNameEn = (app.nameEn || app.nameBn || 'Student').trim().slice(0, 300);
+  const safeDepartment: AdmissionApplication['department'] = ['hifz', 'qawmi', 'general'].includes(
+    app.department
+  )
+    ? app.department
+    : 'hifz';
+  const safeResidentialStatus = ['residential', 'day_scholar'].includes(app.residentialStatus)
+    ? app.residentialStatus
+    : 'residential';
+  const safeStatus = [
+    'pending',
+    'under_review',
+    'needs_correction',
+    'approved',
+    'rejected',
+  ].includes(app.status)
+    ? app.status
+    : 'pending';
+  const safeAuthorId = (authorId || app.authorId || 'public-applicant').trim().slice(0, 128);
+
+  const payload: Record<string, string | number | boolean> = {
+    // 15 mandatory non-timestamp keys required by isValidAdmissionApplication
+    referenceNo: safeReferenceNo.length >= 4 ? safeReferenceNo : `UQCM-${safeReferenceNo}`,
+    nameBn: safeNameBn,
+    nameEn: safeNameEn,
+    department: safeDepartment,
+    requestedClass: (app.requestedClass || '').trim(),
+    guardianName: (app.guardianName || app.fatherName || '').trim(),
+    guardianPhone: (app.guardianPhone || '').trim(),
+    residentialStatus: safeResidentialStatus,
+    status: safeStatus,
+    assignedStudentId: (app.assignedStudentId || '').trim(),
+    assignedAdmissionNo: (app.assignedAdmissionNo || '').trim(),
+    reviewedByUid: (app.reviewedByUid || '').trim(),
+    applicantUid: (app.applicantUid || '').trim(),
+    guardianUid: (app.guardianUid || '').trim(),
+    authorId: safeAuthorId,
+
+    // 24 core workflow & approval fields (total 39 keys + 2 timestamps = 41 keys)
+    dateOfBirth: (app.dateOfBirth || '').trim(),
+    gender: app.gender === 'female' ? 'female' : 'male',
+    bloodGroup: (app.bloodGroup || 'O+').trim(),
+    presentAddress: (app.presentAddress || '').trim(),
+    fatherName: (app.fatherName || '').trim(),
+    motherName: (app.motherName || '').trim(),
+    guardianRelation: (app.guardianRelation || '').trim(),
+    guardianEmail: (app.guardianEmail || '').trim(),
+    requestGuardianAccount: Boolean(app.requestGuardianAccount),
+    guardianVerificationMethod: app.guardianVerificationMethod || 'sms_otp',
+    guardianVerificationStatus: app.guardianVerificationStatus || 'pending_verification',
+    guardianAccountStatus: app.guardianAccountStatus || 'pending_verification',
+    studentAccountStatus: app.studentAccountStatus || 'pending_approval',
+    academicSession: (app.academicSession || '২০২৬').trim(),
+    assignedRollNo:
+      typeof app.assignedRollNo === 'number' && Number.isFinite(app.assignedRollNo)
+        ? app.assignedRollNo
+        : 0,
+    assignedDormitoryRoom: (app.assignedDormitoryRoom || '').trim(),
+    assignedMonthlyFeeBdt:
+      typeof app.assignedMonthlyFeeBdt === 'number' && Number.isFinite(app.assignedMonthlyFeeBdt)
+        ? app.assignedMonthlyFeeBdt
+        : 0,
+    adminRemarks: (app.adminRemarks || '').trim(),
+    submittedDate: (app.submittedDate || '').trim(),
+    reviewedDate: (app.reviewedDate || '').trim(),
+    entrySource: app.entrySource || 'online_public',
+    studentInvitationCode: (app.studentInvitationCode || '').trim(),
+    guardianInvitationCode: (app.guardianInvitationCode || '').trim(),
+    consentAccepted: Boolean(app.consentAccepted),
+  };
+
+  // Optional secondary fields: include only when non-empty and cap at 46 keys before timestamps (48 total <= 50)
+  const optionalStringEntries: Array<[string, string | undefined]> = [
+    ['permanentAddress', app.permanentAddress],
+    ['fatherPhone', app.fatherPhone],
+    ['motherPhone', app.motherPhone],
+    ['birthRegNo', app.birthRegNo],
+    ['nameAr', app.nameAr],
+    ['previousInstitution', app.previousInstitution],
+    ['previousClass', app.previousClass],
+    ['medicalOrSpecialNotes', app.medicalOrSpecialNotes],
+    ['photoUrl', app.photoUrl],
+    ['documentName', app.documentName],
+    ['documentSummaryUrl', app.documentSummaryUrl],
+    ['applicantEmail', app.applicantEmail],
+  ];
+
+  for (const [key, rawValue] of optionalStringEntries) {
+    if (Object.keys(payload).length >= 46) break;
+    const trimmed = (rawValue || '').trim();
+    if (trimmed.length > 0) {
+      payload[key] = trimmed;
+    }
+  }
+
+  return payload;
 }
 
 // ============================================================================

@@ -1,7 +1,5 @@
 import crypto from 'node:crypto';
-import { cert, getApps, initializeApp, type App as AdminApp } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
-import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import type { App as AdminApp } from 'firebase-admin/app';
 
 export const DEFAULT_FIREBASE_PROJECT_ID = 'amazing-haven-348x0';
 export const DEFAULT_FIRESTORE_DATABASE_ID = 'ai-studio-1b55b05f-f4f5-4207-bc43-a2855e1a028e';
@@ -194,7 +192,10 @@ export function verifyBootstrapSecretTimingSafe(
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-function getOrInitializeAdminApp(env: Record<string, string | undefined> = process.env): AdminApp {
+async function getOrInitializeAdminApp(
+  env: Record<string, string | undefined> = process.env
+): Promise<AdminApp> {
+  const { cert, getApps, initializeApp } = await import('firebase-admin/app');
   const existing = getApps();
   if (existing.length > 0) {
     return existing[0];
@@ -327,7 +328,11 @@ export async function executeServerSuperAdminBootstrap(
   }
 
   try {
-    const adminApp = getOrInitializeAdminApp(env);
+    const [{ getAuth }, { FieldValue, getFirestore }, adminApp] = await Promise.all([
+      import('firebase-admin/auth'),
+      import('firebase-admin/firestore'),
+      getOrInitializeAdminApp(env),
+    ]);
     const adminAuth = getAuth(adminApp);
     const adminDb = getFirestore(
       adminApp,

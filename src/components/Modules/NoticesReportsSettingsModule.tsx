@@ -1397,8 +1397,8 @@ export function SettingsModule({
                   </td>
                 </tr>
               ) : (
-                adminAuditLogs.map((log) => (
-                  <tr key={log.id} className="hover:bg-stone-50/70">
+                adminAuditLogs.map((log, idx) => (
+                  <tr key={log.id ? `${log.id}-${idx}` : `log-${idx}`} className="hover:bg-stone-50/70">
                     <td className="py-3 px-4 font-mono text-slate-600 tabular-nums">
                       {log.timestamp.replace('T', ' ').slice(0, 19)}
                     </td>
