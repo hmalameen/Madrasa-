@@ -6,9 +6,10 @@ import {
   canSafelyAutoActivateServiceWorker,
   classifyServiceWorkerRequest,
   resolvePwaInstallPresentation,
+  shouldRetainCachedEntryOnLogout,
 } from './pwaSecurityLogic';
 
-test('Phase 6.2 Task 2 — manifest.webmanifest satisfies exact installability and branding specifications', () => {
+test('Phase 6.2.1 Check 1 — manifest.webmanifest satisfies exact installability, icon path, and deduplication requirements', () => {
   const manifestPath = path.resolve(process.cwd(), 'public/manifest.webmanifest');
   assert.equal(fs.existsSync(manifestPath), true);
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
@@ -22,6 +23,8 @@ test('Phase 6.2 Task 2 — manifest.webmanifest satisfies exact installability a
   assert.equal(manifest.background_color, '#F7F4EC');
 
   assert.equal(Array.isArray(manifest.icons), true);
+  assert.equal(manifest.icons.length, 3, 'Exactly 3 canonical icon entries must exist');
+
   const icon192 = manifest.icons.find(
     (i: { sizes: string; purpose: string }) => i.sizes === '192x192' && i.purpose === 'any'
   );
@@ -36,15 +39,39 @@ test('Phase 6.2 Task 2 — manifest.webmanifest satisfies exact installability a
   assert.ok(icon512, '512x512 any icon must be declared');
   assert.ok(iconMaskable, '512x512 maskable icon must be declared');
 
-  // Verify the referenced PNG files exist in /public
+  // Verify exact canonical paths
+  assert.equal(icon192.src, '/assets/branding/icon-192x192.png');
+  assert.equal(icon512.src, '/assets/branding/icon-512x512.png');
+  assert.equal(iconMaskable.src, '/assets/branding/icon-512x512-maskable.png');
+
+  // Verify no duplicate icon src paths exist
+  const uniqueSrcs = new Set(manifest.icons.map((i: { src: string }) => i.src));
+  assert.equal(uniqueSrcs.size, manifest.icons.length, 'No duplicated icon paths allowed');
+
+  // Verify the referenced PNG files exist on disk in /public
   for (const icon of [icon192, icon512, iconMaskable]) {
     const diskPath = path.resolve(process.cwd(), 'public', icon.src.replace(/^\//, ''));
     assert.equal(fs.existsSync(diskPath), true, `Missing icon file at ${diskPath}`);
   }
 });
 
-test('Phase 6.2 Task 3 — Service Worker strictly blocks Firebase Auth, Firestore, private CMS, student/guardian/fee/exam records, and API routes', () => {
+test('Phase 6.2.1 Check 2 — Service Worker strictly blocks Firebase Auth, Firestore, private CMS, POST/PUT/PATCH/DELETE, and sensitive paths', () => {
   const origin = 'https://ummulquranmadrasa.edu.bd';
+
+  // 0. Non-GET methods (POST, PUT, PATCH, DELETE) -> MUST NEVER CACHE
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    assert.equal(
+      classifyServiceWorkerRequest(
+        {
+          method,
+          url: `${origin}/assets/branding/icon-192x192.png`,
+        },
+        origin
+      ),
+      'BYPASS_SENSITIVE_OR_API',
+      `${method} requests must never be cached`
+    );
+  }
 
   // 1. Firebase Auth & Token endpoints -> MUST NEVER CACHE
   assert.equal(
@@ -138,7 +165,7 @@ test('Phase 6.2 Task 3 — Service Worker strictly blocks Firebase Auth, Firesto
     );
   }
 
-  // 5. Safe static assets -> ALLOWED TO CACHE
+  // 5. Safe static assets (including Vite-generated hashed JS/CSS bundles) -> ALLOWED TO CACHE
   assert.equal(
     classifyServiceWorkerRequest(
       {
@@ -159,6 +186,16 @@ test('Phase 6.2 Task 3 — Service Worker strictly blocks Firebase Auth, Firesto
     ),
     'CACHE_SAFE_STATIC_ASSET'
   );
+  assert.equal(
+    classifyServiceWorkerRequest(
+      {
+        method: 'GET',
+        url: `${origin}/assets/index-xyz789.css`,
+      },
+      origin
+    ),
+    'CACHE_SAFE_STATIC_ASSET'
+  );
 
   // 6. Document navigation -> Network-Only with offline.html fallback (never caches HTML pages)
   assert.equal(
@@ -174,7 +211,69 @@ test('Phase 6.2 Task 3 — Service Worker strictly blocks Firebase Auth, Firesto
   );
 });
 
-test('Phase 6.2 Task 4 — resolves platform install UI accurately for Android/Desktop Chromium, iOS Safari, and installed standalone states', () => {
+test('Phase 6.2.1 Check 3 — Cache update safety and logout cache cleanup preserve required public application assets', () => {
+  const origin = 'https://ummulquranmadrasa.edu.bd';
+
+  // Active data-entry sessions are never interrupted
+  assert.equal(
+    canSafelyAutoActivateServiceWorker({
+      hasExistingController: true,
+      isFormElementFocused: true,
+      hasUnsavedAdmissionDraft: false,
+    }),
+    false
+  );
+  assert.equal(
+    canSafelyAutoActivateServiceWorker({
+      hasExistingController: true,
+      isFormElementFocused: false,
+      hasUnsavedAdmissionDraft: true,
+    }),
+    false
+  );
+  assert.equal(
+    canSafelyAutoActivateServiceWorker({
+      hasExistingController: false,
+      isFormElementFocused: true,
+      hasUnsavedAdmissionDraft: true,
+    }),
+    true
+  );
+
+  // Logout cache cleanup retains required public assets (offline.html, manifest, icons, Vite hashed JS/CSS, fonts)
+  assert.equal(shouldRetainCachedEntryOnLogout(`${origin}/offline.html`, origin), true);
+  assert.equal(shouldRetainCachedEntryOnLogout(`${origin}/manifest.webmanifest`, origin), true);
+  assert.equal(
+    shouldRetainCachedEntryOnLogout(`${origin}/assets/branding/icon-512x512.png`, origin),
+    true
+  );
+  assert.equal(
+    shouldRetainCachedEntryOnLogout(`${origin}/assets/index-D9f8a12b.js`, origin),
+    true
+  );
+  assert.equal(
+    shouldRetainCachedEntryOnLogout(`${origin}/assets/index-A1b2c3d4.css`, origin),
+    true
+  );
+  assert.equal(
+    shouldRetainCachedEntryOnLogout(
+      'https://fonts.gstatic.com/s/notosansbengali/v33/font.woff2',
+      origin
+    ),
+    true
+  );
+
+  // Logout cache cleanup immediately rejects any non-static, sensitive, or API URLs
+  assert.equal(
+    shouldRetainCachedEntryOnLogout(`${origin}/settings/website-cms-config`, origin),
+    false
+  );
+  assert.equal(shouldRetainCachedEntryOnLogout(`${origin}/api/resolve-login`, origin), false);
+  assert.equal(shouldRetainCachedEntryOnLogout(`${origin}/students/stu-101`, origin), false);
+  assert.equal(shouldRetainCachedEntryOnLogout(`${origin}/portal`, origin), false);
+});
+
+test('Phase 6.2.1 Check 4 — resolves platform install UI accurately for Android/Desktop Chromium, iOS Safari, and installed standalone states', () => {
   // 1. Android Chrome with beforeinstallprompt
   const androidInstallable = resolvePwaInstallPresentation({
     userAgent:
@@ -220,29 +319,3 @@ test('Phase 6.2 Task 4 — resolves platform install UI accurately for Android/D
   assert.equal(desktopNoPrompt.installMode, 'hidden_unsupported');
 });
 
-test('Phase 6.2 Task 3 — safe service worker update guard never interrupts active data-entry sessions', () => {
-  assert.equal(
-    canSafelyAutoActivateServiceWorker({
-      hasExistingController: true,
-      isFormElementFocused: true,
-      hasUnsavedAdmissionDraft: false,
-    }),
-    false
-  );
-  assert.equal(
-    canSafelyAutoActivateServiceWorker({
-      hasExistingController: true,
-      isFormElementFocused: false,
-      hasUnsavedAdmissionDraft: true,
-    }),
-    false
-  );
-  assert.equal(
-    canSafelyAutoActivateServiceWorker({
-      hasExistingController: false,
-      isFormElementFocused: true,
-      hasUnsavedAdmissionDraft: true,
-    }),
-    true
-  );
-});

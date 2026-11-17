@@ -181,6 +181,18 @@ export function usePWAInstall() {
 
   const applyWaitingUpdate = () => {
     if (!globalWaitingWorker) return;
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener(
+        'controllerchange',
+        () => {
+          if (refreshing) return;
+          refreshing = true;
+          window.location.reload();
+        },
+        { once: true }
+      );
+    }
     globalWaitingWorker.postMessage({ type: 'SKIP_WAITING' });
     globalWaitingWorker = null;
     notifyListeners();

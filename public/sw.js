@@ -53,7 +53,6 @@ const FORBIDDEN_PATH_OR_QUERY_KEYWORDS = [
   'accesstoken',
   'refreshtoken',
   'oobcode',
-  ' students',
   '/students',
   '/guardians',
   '/attendance',
@@ -113,6 +112,16 @@ function isSafeStaticAsset(url, selfOrigin) {
   return SAFE_STATIC_EXTENSION_RE.test(url.pathname);
 }
 
+function shouldRetainOnLogout(url, selfOrigin) {
+  if (isForbiddenRequest({ method: 'GET', headers: new Headers() }, url)) {
+    return false;
+  }
+  if (url.origin === selfOrigin && PRECACHE_URLS.includes(url.pathname)) {
+    return true;
+  }
+  return isSafeStaticAsset(url, selfOrigin);
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(STATIC_CACHE_NAME).then((cache) => {
@@ -155,7 +164,8 @@ self.addEventListener('message', (event) => {
   if (data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   } else if (data.type === 'CLEAR_SENSITIVE_CACHES') {
-    // Defense-in-depth on logout: purge any non-shell cache and ensure only PRECACHE_URLS remain
+    // Defense-in-depth on logout: delete any non-shell caches and remove any non-static/forbidden entries
+    // while preserving required public application assets (PRECACHE_URLS, Vite hashed JS/CSS, branding, fonts).
     event.waitUntil(
       caches.keys().then((keys) =>
         Promise.all(
@@ -168,7 +178,7 @@ self.addEventListener('message', (event) => {
             await Promise.all(
               requests.map((req) => {
                 const reqUrl = new URL(req.url);
-                if (!PRECACHE_URLS.includes(reqUrl.pathname)) {
+                if (!shouldRetainOnLogout(reqUrl, self.location.origin)) {
                   return cache.delete(req);
                 }
                 return undefined;

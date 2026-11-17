@@ -183,6 +183,52 @@ export function resolvePwaInstallPresentation(
   };
 }
 
+export const PRECACHE_PATHS = [
+  '/offline.html',
+  '/manifest.webmanifest',
+  '/favicon.png',
+  '/assets/branding/Ummul_Quran_Cadet_Madrasa_Clean_Logo_Transparent.png',
+  '/assets/branding/icon-192x192.png',
+  '/assets/branding/icon-512x512.png',
+  '/assets/branding/icon-512x512-maskable.png',
+  '/assets/branding/apple-touch-icon.png',
+  '/assets/branding/favicon-32x32.png',
+  '/assets/branding/favicon-64x64.png',
+] as const;
+
+export function shouldRetainCachedEntryOnLogout(
+  url: string,
+  appOrigin = 'https://ummulquranmadrasa.edu.bd'
+): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, appOrigin);
+  } catch {
+    return false;
+  }
+
+  const decision = classifyServiceWorkerRequest(
+    {
+      method: 'GET',
+      url: parsed.toString(),
+    },
+    appOrigin
+  );
+
+  if (decision === 'BYPASS_SENSITIVE_OR_API') {
+    return false;
+  }
+
+  if (
+    parsed.origin === new URL(appOrigin).origin &&
+    (PRECACHE_PATHS as readonly string[]).includes(parsed.pathname)
+  ) {
+    return true;
+  }
+
+  return decision === 'CACHE_SAFE_STATIC_ASSET';
+}
+
 export function canSafelyAutoActivateServiceWorker(state: {
   hasExistingController: boolean;
   isFormElementFocused: boolean;
@@ -197,3 +243,4 @@ export function canSafelyAutoActivateServiceWorker(state: {
   }
   return true;
 }
+
